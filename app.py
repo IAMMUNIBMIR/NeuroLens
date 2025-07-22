@@ -139,7 +139,7 @@ if uploaded_file is not None:
         model = load_model_custom('xception_model.weights.h5')
         img_size = (299, 299)
     else:
-        model = load_model('cnn_model.h5')
+        model = load_model('cnn_model.keras')
         img_size = (224, 224)
 
 

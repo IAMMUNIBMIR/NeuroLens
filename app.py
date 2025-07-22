@@ -93,32 +93,8 @@ st.title("Brain Tumor Classification")
 st.write("Upload an image of a brain MRI scan to classify.")
 
 
-def load_model_custom(model_path):
-    img_shape=(299,299,3)
-    base_model = tf.keras.applications.Xception(include_top=False, weights="imagenet",
-                                input_shape=img_shape, pooling='max')
-
-    model = Sequential([
-        base_model,
-        Flatten(),
-        Dropout(rate=0.3),
-        Dense(128, activation='relu'),
-        Dropout(rate=0.25),
-        Dense(4, activation='softmax')
-    ])
-
-    model.build((None,) + img_shape)
-
-    # Compile the model
-    model.compile(Adamax(learning_rate=0.001),
-                loss='categorical_crossentropy',
-                metrics=['accuracy',
-                            Precision(),
-                            Recall()])
-
-    model.load_weights(model_path)
-
-    return model
+def load_model_custom(path: str):
+    return load_model(path, compile=False)
 
 # Define correct class labels
 labels = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
@@ -136,7 +112,7 @@ if uploaded_file is not None:
 
     # Modify the model loading based on selection
     if selected_model == "Transfer Learning - Xception":
-        model = load_model_custom('xception_full.keras')
+        model = load_model("xception_full.keras")
         img_size = (299, 299)
     else:
         model = load_model('cnn_model.keras')

@@ -136,7 +136,7 @@ if uploaded_file is not None:
 
     # Modify the model loading based on selection
     if selected_model == "Transfer Learning - Xception":
-        model = load_model_custom('xception_model.weights.h5')
+        model = load_model_custom('xception_full.keras')
         img_size = (299, 299)
     else:
         model = load_model('cnn_model.keras')

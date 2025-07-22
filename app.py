@@ -1,14 +1,14 @@
 import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
+from keras.models import load_model
+from keras.preprocessing import image
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 import cv2
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, Flatten
-from tensorflow.keras.optimizers import Adamax
-from tensorflow.keras.metrics import Precision, Recall
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Flatten
+from keras.optimizers import Adamax
+from keras.metrics import Precision, Recall
 import google.generativeai as genai
 import PIL.Image
 import os

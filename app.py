@@ -37,16 +37,26 @@ def fetch_if_missing(url_env_key: str, dest: Path):
 load_dotenv()
 
 # ---- Gemini robust config (avoid metadata 503) ----
-try:
-    GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY") if hasattr(st, "secrets") else os.getenv("GOOGLE_API_KEY")
-except Exception:
+ENABLE_GEMINI = True
+
+# pull key from secrets or env
+GOOGLE_API_KEY = None
+if hasattr(st, "secrets"):
+    GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GENAI_ON = bool(GOOGLE_API_KEY)
-if GENAI_ON:
-    genai.configure(api_key=GOOGLE_API_KEY)
+
+if GOOGLE_API_KEY:
+    os.environ["NO_GCE_CHECK"] = "1"                 # stop metadata probe
+    os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+    import google.generativeai as genai
+    genai.configure(api_key=GOOGLE_API_KEY, transport="rest")
+else:
+    ENABLE_GEMINI = False
+
 
 def generate_explanation(img_path, model_prediction, confidence):
-    if not GENAI_ON:
+    if not ENABLE_GEMINI:
         return f"Prediction: {model_prediction} ({confidence*100:.2f}%). Gemini disabled."
     prompt = f"""You are an expert neurologist...
     The machine learning model predicted the image to of class "{model_prediction}" with a confidence of {confidence*100}%.

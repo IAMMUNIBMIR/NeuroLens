@@ -51,8 +51,6 @@ if GOOGLE_API_KEY:
     os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
     import google.generativeai as genai
     genai.configure(api_key=GOOGLE_API_KEY, transport="rest")
-else:
-    ENABLE_GEMINI = False
 
 
 def generate_explanation(img_path, model_prediction, confidence):

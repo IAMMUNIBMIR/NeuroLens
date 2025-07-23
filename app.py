@@ -214,7 +214,7 @@ if mode == "DICOM (.zip/.dcm)":
         with st.spinner("Running model on all slices..."):
             vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
             vol_rgb = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
-            preds = model.predict(vol_rgb, batch_size=16, verbose=0)
+            preds = model(tf.convert_to_tensor(vol_rgb), training=False).numpy()
         no_tumor_idx = LABELS.index("No tumor")
         tumor_probs = 1.0 - preds[:, no_tumor_idx]
         st.line_chart(tumor_probs, use_container_width=True)
@@ -234,7 +234,8 @@ else:
     img_array = np.expand_dims(img_array, axis=0).astype("float32") / 255.0
 
 # ---------------------- Prediction & Visualization ---------------------------
-prediction = model.predict(img_array, verbose=0)
+pred_tensor = model(tf.convert_to_tensor(img_array), training=False)
+prediction = pred_tensor.numpy()
 
 class_index = int(np.argmax(prediction[0]))
 result = LABELS[class_index]

@@ -223,12 +223,10 @@ selected_model = st.radio(
 
 # Load appropriate model & set image size
 if selected_model == "Transfer Learning - Xception":
-    fetch_if_missing("XCEPT_WEIGHTS_URL", MODELS_DIR / "xception_model.weights.h5")
-    model = load_model_custom(str(MODELS_DIR / "xception_model.weights.h5"))
+    model = load_model("xception_full.keras")
     img_size = (299, 299)
 else:
-    fetch_if_missing("CNN_WEIGHTS_URL", MODELS_DIR / "cnn_model.h5")
-    model = load_model(str(MODELS_DIR / "cnn_model.h5"))
+    model = load_model('cnn_model.keras')
     img_size = (224, 224)
 
 # ---------------------- NEW: input-type switch -------------------------------

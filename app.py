@@ -266,8 +266,7 @@ else:
     img_array = np.expand_dims(img_array, axis=0).astype("float32") / 255.0
 
 # ---------------------- Prediction & Visualization ---------------------------
-pred_tensor = model(tf.convert_to_tensor(img_array), training=False)
-prediction = pred_tensor.numpy()
+prediction = model.predict(img_array, verbose=0)
 
 class_index = int(np.argmax(prediction[0]))
 result = LABELS[class_index]

@@ -15,6 +15,7 @@ from keras.metrics import Precision, Recall
 from keras.preprocessing import image
 import google.generativeai as genai
 from dotenv import load_dotenv
+from src.explain.fallback_text import compute_saliency_stats, rule_based_explanation
 
 # ---------------------- constants/helpers --------------------------
 LABELS = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
@@ -53,24 +54,33 @@ if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY, transport="rest")
 
 
-def generate_explanation(img_path, model_prediction, confidence):
+def safe_explanation(img_path, pred_label, confidence, saliency_map,probs, labels, slice_idx=None):
+
+    """Try Gemini; on failure or disabled, fall back to rule-based explanation."""
+    stats = compute_saliency_stats(saliency_map)
+    top2_idx = np.argsort(probs)[::-1][:2]
+    top2 = [(labels[i], float(probs[i])) for i in top2_idx]
+
     if not ENABLE_GEMINI:
-        return f"Prediction: {model_prediction} ({confidence*100:.2f}%). Gemini disabled."
+        return rule_based_explanation(pred_label, confidence, stats, top2, slice_idx)
+
     prompt = f"""You are an expert neurologist...
-    The machine learning model predicted the image to of class "{model_prediction}" with a confidence of {confidence*100}%.
+    The machine learning model predicted the image to of class "{pred_label}" with a confidence of {confidence*100}%.
     In your response:
     - Explain what regions of the brain the model is focusing on (light cyan).
     - Explain possible reasons for the prediction.
     - Do not restate how saliency maps work.
     - Max 4 sentences."""
+
     try:
-        img = PIL.Image.open(img_path)
+        img = PIL.Image.open(img_path).resize((512, 512))
         model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content([prompt, img], request_options={"timeout": 20})
+        resp = model.generate_content([prompt, img], request_options={"timeout": 40})
         return resp.text
     except Exception as e:
         st.warning(f"Gemini failed: {e}")
-        return f"Prediction: {model_prediction} ({confidence*100:.2f}%). See saliency map."
+        return rule_based_explanation(pred_label, confidence, stats, top2, slice_idx)
+
 
 def generate_saliency_map(model, img_array, class_index, img_size):
     with tf.GradientTape() as tape:
@@ -318,6 +328,7 @@ for i, prob in enumerate(sorted_probs):
 
 st.plotly_chart(fig)
 
-explanation = generate_explanation(saliency_map_path, result, prediction[0][class_index])
+slice_for_text = slice_idx if mode.startswith("DICOM") else None
+explanation = safe_explanation(saliency_map_path,result,float(prediction[0][class_index]),saliency_map,probabilities,LABELS,slice_for_text)
 st.write("## Explanation")
 st.write(explanation)

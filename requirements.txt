@@ -10,3 +10,4 @@ google-generativeai>=0.4.0
 pydicom==2.4.4
 nibabel==5.2.1    
 imageio==2.34.1
+reportlab==3.6.12

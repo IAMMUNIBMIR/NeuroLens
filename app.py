@@ -8,14 +8,19 @@ import streamlit as st
 import plotly.graph_objects as go
 import PIL.Image
 import tensorflow as tf
+
 from keras.models import load_model, Sequential
 from keras.layers import Dense, Dropout, Flatten
 from keras.optimizers import Adamax
 from keras.metrics import Precision, Recall
 from keras.preprocessing import image
 import google.generativeai as genai
+
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 from dotenv import load_dotenv
 from src.explain.fallback_text import compute_saliency_stats, rule_based_explanation
+from src.explain.pdf_report import build_report_pdf
 tf.keras.backend.clear_session()
 
 # ---------------------- constants/helpers --------------------------
@@ -341,3 +346,6 @@ slice_for_text = slice_idx if mode.startswith("DICOM") else None
 explanation = safe_explanation(saliency_map_path,result,float(prediction[0][class_index]),saliency_map,probabilities,LABELS,slice_for_text)
 st.write("## Explanation")
 st.write(explanation)
+
+pdf_bytes = build_report_pdf(original_img_for_display, superimposed_img, result, float(prediction[0][class_index]), explanation)
+st.download_button("📄 Download Report as PDF", data=pdf_bytes, file_name="brain_tumor_report.pdf", mime="application/pdf")

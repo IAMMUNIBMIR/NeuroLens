@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 import cv2
+import io
 import numpy as np
 import requests
 import streamlit as st
@@ -183,7 +184,7 @@ def load_dicom_zip(file_bytes: bytes) -> np.ndarray:
 
 @st.cache_data(show_spinner=False)
 def load_single_dcm(file_bytes: bytes) -> np.ndarray:
-    import io, pydicom
+    import pydicom
     ds = pydicom.dcmread(file_bytes)
     arr = ds.pixel_array.astype(np.float32)
     return arr[None, ...]  # (1,H,W)

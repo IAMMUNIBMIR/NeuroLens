@@ -1,79 +1,95 @@
 # src/explain/pdf_report.py
-
 import io
-from typing import Optional, Sequence
-
-import numpy as np
-from PIL import Image
+from datetime import datetime
+from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import ImageReader, simpleSplit
-from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.platypus import Table, TableStyle
+from PIL import Image
 
-
-def build_report_pdf(original_img: np.ndarray, saliency_img: np.ndarray, label: str, confidence: float, explanation: str, probs: Optional[Sequence[float]] = None, labels: Optional[Sequence[str]] = None,) -> bytes:
-    """
-    Build a one‐page PDF report showing:
-      - the original image
-      - the saliency overlay
-      - classification result + confidence
-      - optional class‐probability table
-      - text explanation
-    """
+def build_report_pdf(
+    original_img,       # numpy array H×W×3 uint8
+    saliency_img,       # numpy array H×W×3 uint8
+    label: str,
+    confidence: float,
+    explanation: str,
+    probs=None,         # optional: 1D array of class probabilities
+    labels=None         # optional: list of class names
+):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
-    w, h = letter
+    width, height = letter
 
-    # Title
-    c.setTitle("Brain Tumor Classification Report")
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, h - 50, "Brain Tumor Classification Report")
+    # ——— Title & Date —————————————————————————————————————————————
+    title = "Brain Tumor Classification Report"
+    c.setTitle(title)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawCentredString(width/2, height - 50, title)                                    # centered title
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(width - 40, height - 55, f"Date: {now}")                         # report date
+    c.setStrokeColor(colors.grey)
+    c.setLineWidth(1)
+    c.line(40, height - 65, width - 40, height - 65)                                   # separator line
 
-    # Helper: numpy array → in‐memory PNG
-    def to_buffer(arr: np.ndarray) -> io.BytesIO:
+    # ——— Images ————————————————————————————————————————————————————————
+    def to_imgbuf(arr):
         buf = io.BytesIO()
         Image.fromarray(arr).save(buf, format="PNG")
         buf.seek(0)
         return buf
 
-    orig_buf = to_buffer(original_img)
-    sal_buf  = to_buffer(saliency_img)
-
-    # Compute sizes & positions
+    orig_buf     = to_imgbuf(original_img)
+    saliency_buf = to_imgbuf(saliency_img)
     margin = 40
-    img_w  = (w - 3 * margin) / 2
+    img_w  = (width - 3*margin) / 2
     aspect = original_img.shape[0] / original_img.shape[1]
     img_h  = img_w * aspect
-    img_y  = h - 80 - img_h
+    img_y  = height - 100 - img_h
 
-    # Draw images
-    c.drawImage(ImageReader(orig_buf), margin, img_y, img_w, img_h)
-    c.drawImage(ImageReader(sal_buf), 2*margin + img_w, img_y, img_w, img_h)
+    c.drawImage(ImageReader(orig_buf),     margin,        img_y, img_w, img_h)
+    c.drawImage(ImageReader(saliency_buf), 2*margin+img_w, img_y, img_w, img_h)
 
-    # Prediction line
+    # ——— Classification —————————————————————————————————————————————
     text_y = img_y - 30
     c.setFont("Helvetica-Bold", 12)
     c.drawString(margin, text_y, f"Prediction: {label} ({confidence*100:.2f}%)")
 
-    # Optional probability table
+    # ——— Probability Table —————————————————————————————————————————————
     if probs is not None and labels is not None:
-        c.setFont("Helvetica", 10)
-        table_y = text_y - 20
-        for i, (lab, p) in enumerate(sorted(zip(labels, probs), key=lambda x: -x[1])):
-            c.drawString(margin + 20, table_y - 14*i, f"{lab:<12} {p:.4f}")
-        text_y = table_y - 14 * len(labels) - 10
+        data = [["Class", "Probability"]]
+        for lab, p in sorted(zip(labels, probs), key=lambda x: -x[1]):
+            data.append([lab, f"{p:.4f}"])
+        table = Table(data, colWidths=[100, 80])
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.black),
+            ("FONTNAME",  (0,0), (-1,0), "Helvetica-Bold"),
+            ("ALIGN",     (1,1), (-1,-1), "RIGHT"),
+            ("GRID",      (0,0), (-1,-1), 0.5, colors.grey),
+            ("BOTTOMPADDING", (0,0), (-1,0), 6),
+        ]))
+        table.wrapOn(c, width, height)
+        table.drawOn(c, margin, text_y - 100)
+        expl_start_y = text_y - 120 - len(labels)*18
     else:
-        text_y -= 30
+        expl_start_y = text_y - 40
 
-    # Explanation block
+    # ——— Explanation —————————————————————————————————————————————————
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(margin, text_y, "Explanation:")
+    c.drawString(margin, expl_start_y, "Explanation:")
     c.setFont("Helvetica", 10)
-    max_width = w - 2*margin
-    lines = simpleSplit(explanation, "Helvetica", 10, max_width)
+    lines = simpleSplit(explanation, "Helvetica", 10, width - 2*margin)
     for i, line in enumerate(lines):
-        c.drawString(margin, text_y - 14*(i+1), line)
+        c.drawString(margin, expl_start_y - 14*(i+1), line)
 
+    # ——— Footer with page number ——————————————————————————————————————
     c.showPage()
+    page_str = f"Page 1"
+    c.setFont("Helvetica", 8)
+    c.drawRightString(width - 40, 20, page_str)
+
     c.save()
     buffer.seek(0)
     return buffer.read()

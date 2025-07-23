@@ -208,7 +208,7 @@ def dicom_uploader_and_viewer():
     orientation = "axial"  # keep simple; can add radio later
     idx = st.slider("Slice", 0, vol.shape[0]-1, vol.shape[0]//2, 1)
     slice_img = normalize_slice(vol[idx])
-    st.image(slice_img, caption=f"Axial slice {idx}/{vol.shape[0]-1}", use_column_width=True)
+    st.image(slice_img, caption=f"Axial slice {idx}/{vol.shape[0]-1}", use_container_width=True)
     return vol, orientation, idx
 
 # ---------------------- UI ---------------------------------------------------
@@ -237,11 +237,31 @@ if mode == "DICOM (.zip/.dcm)":
     if volume is None:
         st.stop()
 
-    target_slice = volume[volume.shape[0] // 2]  # middle slice
+    target_slice = volume[slice_idx]
     res = cv2.resize(target_slice, img_size)
     res = np.stack([res, res, res], axis=-1) / 255.0
     img_array = np.expand_dims(res, axis=0)
     original_img_for_display = res.astype("uint8")
+    run_all = st.checkbox("Analyze all slices", value=False)
+    if run_all:
+        vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
+        vol_rgb = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
+        preds = model.predict(vol_rgb, batch_size=16)
+        top_classes = np.argmax(preds, axis=1)
+        no_tumor_idx = labels.index("No tumor")  # or LABELS if that’s your var
+        tumor_probs = 1 - preds[:, no_tumor_idx]
+
+        st.line_chart(tumor_probs, height=180, use_container_width=True)
+
+        suspicious_idx = int(np.argmax(tumor_probs))
+        st.write(f"Most suspicious slice: {suspicious_idx}")
+        if st.button("Go to that slice"):
+            slice_idx = suspicious_idx
+            target_slice = volume[slice_idx]
+            res = cv2.resize(target_slice, img_size)
+            res = np.stack([res, res, res], axis=-1) / 255.0
+            img_array = np.expand_dims(res, axis=0)
+            original_img_for_display = res.astype("uint8")
 
 else:
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
@@ -288,9 +308,9 @@ cv2.imwrite(saliency_map_path, cv2.cvtColor(superimposed_img, cv2.COLOR_RGB2BGR)
 
 col1, col2 = st.columns(2)
 with col1:
-    st.image(original_img_for_display, caption='Input Image', use_column_width=True)
+    st.image(original_img_for_display, caption='Input Image', use_container_width=True)
 with col2:
-    st.image(superimposed_img, caption='Saliency Map', use_column_width=True)
+    st.image(superimposed_img, caption='Saliency Map', use_container_width=True)
 
 # Display the result
 st.write("## Classification Results")

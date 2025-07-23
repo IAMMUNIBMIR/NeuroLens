@@ -7,3 +7,6 @@ numpy>=1.24.0
 pillow>=10.0.0
 python-dotenv>=1.0.1
 google-generativeai>=0.4.0
+pydicom==2.4.4
+nibabel==5.2.1    
+imageio==2.34.1

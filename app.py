@@ -16,6 +16,7 @@ from keras.preprocessing import image
 import google.generativeai as genai
 from dotenv import load_dotenv
 from src.explain.fallback_text import compute_saliency_stats, rule_based_explanation
+tf.keras.backend.clear_session()
 
 # ---------------------- constants/helpers --------------------------
 LABELS = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
@@ -201,14 +202,22 @@ def dicom_uploader_and_viewer():
 st.title("Brain Tumor Classification")
 st.write("Upload an image of a brain MRI scan to classify.")
 
-selected_model = st.radio("Select Model",
-                          ("Transfer Learning - Xception", "Custom CNN"))
+@st.cache_resource
+def get_models():
+    # clear any lingering state
+    tf.keras.backend.clear_session()
+    xcep = tf.keras.models.load_model("xception_full.keras", compile=False)
+    cnn  = tf.keras.models.load_model("cnn_model.keras",   compile=False)
+    return xcep, cnn
 
+selected_model = st.radio("Select Model", ("Transfer Learning - Xception", "Custom CNN"))
+
+xcep_model, cnn_model = get_models()
 if selected_model == "Transfer Learning - Xception":
-    model = load_model("xception_full.keras", compile=False)
+    model = xcep_model
     img_size = (299, 299)
 else:
-    model = load_model("cnn_model.keras", compile=False)
+    model = cnn_model
     img_size = (224, 224)
 
 mode = st.radio("Input type", ["Image (PNG/JPG)", "DICOM (.zip/.dcm)"], horizontal=True)

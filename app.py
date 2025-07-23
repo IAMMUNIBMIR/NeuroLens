@@ -237,18 +237,20 @@ if mode == "DICOM (.zip/.dcm)":
     if volume is None:
         st.stop()
 
-    target_slice = volume[slice_idx]
-    res = cv2.resize(target_slice, img_size)
-    res = np.stack([res, res, res], axis=-1) / 255.0
-    img_array = np.expand_dims(res, axis=0)
-    original_img_for_display = res.astype("uint8")
+    def prep_slice(slice2d, img_size):
+        r = cv2.resize(slice2d, img_size)
+        r_rgb = np.stack([r, r, r], axis=-1) / 255.0
+        return np.expand_dims(r_rgb, 0), r_rgb.astype("uint8")
+
+    # use user-selected slice
+    img_array, original_img_for_display = prep_slice(volume[slice_idx], img_size)
     run_all = st.checkbox("Analyze all slices", value=False)
     if run_all:
         vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
         vol_rgb = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
         preds = model.predict(vol_rgb, batch_size=16)
         top_classes = np.argmax(preds, axis=1)
-        no_tumor_idx = labels.index("No tumor")  # or LABELS if that’s your var
+        no_tumor_idx = LABELS.index("No tumor")  
         tumor_probs = 1 - preds[:, no_tumor_idx]
 
         st.line_chart(tumor_probs, height=180, use_container_width=True)

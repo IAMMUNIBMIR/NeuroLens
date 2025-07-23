@@ -164,7 +164,7 @@ def _load_series(folder: Path) -> np.ndarray:
 
     arrays = []
     for s in slices:
-        ds = pydicom.dcmread(str(s))
+        ds = pydicom.dcmread(io.BytesIO(file_bytes))
         arr = ds.pixel_array.astype(np.float32) * slope + intercept
         arrays.append(arr)
     return np.stack(arrays, axis=0)  # (S,H,W)
@@ -224,10 +224,10 @@ selected_model = st.radio(
 
 # Load appropriate model & set image size
 if selected_model == "Transfer Learning - Xception":
-    model = load_model("xception_full.keras")
+    model = load_model("xception_full.keras", compile=False)
     img_size = (299, 299)
 else:
-    model = load_model('cnn_model.keras')
+    model = load_model('cnn_model.keras', compile=False)
     img_size = (224, 224)
 
 # ---------------------- NEW: input-type switch -------------------------------
@@ -239,16 +239,15 @@ if mode == "DICOM (.zip/.dcm)":
         st.stop()
 
     def prep_slice(slice2d, size):
-        # resize to model size
         s = cv2.resize(slice2d, size)
-        # normalize 0–255 for display
         disp = ((s - s.min()) / (s.ptp() + 1e-8) * 255).astype("uint8")
-        rgb_disp = np.stack([disp, disp, disp], axis=-1)         # (H,W,3)
+        rgb_disp = np.stack([disp, disp, disp], axis=-1)
         model_in = np.expand_dims(rgb_disp / 255.0, 0).astype("float32")
         return model_in, rgb_disp
 
     # use the user-selected slice
-    img_array, original_img_for_display = prep_slice(volume[slice_idx], img_size)
+    img_array, original_img_for_display = prep_slice(volume[slice_idx], img_size)  # <<< CHANGED
+
 
     run_all = st.checkbox("Analyze all slices", value=False)
     if run_all:
@@ -283,7 +282,7 @@ else:
     img_array /= 255.0  # Normalize
 
 # ---------------------- Prediction & Visualization (unchanged) ---------------
-prediction = model.predict(img_array)
+prediction = model.predict(img_array, verbose=0)
 
 class_index = np.argmax(prediction[0])
 result = LABELS[class_index]
@@ -301,13 +300,13 @@ heatmap = cv2.resize(heatmap, img_size)
 superimposed_img = heatmap * 0.7 + original_img_for_display * 0.3
 superimposed_img = superimposed_img.astype(np.uint8)
 
-img_path = SALIENCY_DIR / (uploaded_file.name if mode != "DICOM (.zip/.dcm)" else "dicom_slice.png")
-with open(img_path, "wb") as f:
-    if mode != "DICOM (.zip/.dcm)":
+if mode != "DICOM (.zip/.dcm)":
+    img_path = SALIENCY_DIR / uploaded_file.name
+    with open(img_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    else:
-        # save the slice image
-        cv2.imwrite(str(img_path), cv2.cvtColor(original_img_for_display, cv2.COLOR_RGB2BGR))
+else:
+    img_path = SALIENCY_DIR / f"dicom_slice_{slice_idx}.png"
+    cv2.imwrite(str(img_path), cv2.cvtColor(original_img_for_display, cv2.COLOR_RGB2BGR))
 
 saliency_map_path = str(SALIENCY_DIR / img_path.name)
 

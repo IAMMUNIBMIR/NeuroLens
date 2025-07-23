@@ -205,8 +205,9 @@ def dicom_uploader_and_viewer():
 
     st.success(f"Loaded volume shape: {vol.shape}")  # (S,H,W)
 
-    orientation = "axial"  # keep simple; can add radio later
-    idx = st.slider("Slice", 0, vol.shape[0]-1, vol.shape[0]//2, 1)
+    orientation = "axial"  
+    default_idx = st.session_state.pop("slice_slider_force", vol.shape[0]//2)
+    idx = st.slider("Slice", 0, vol.shape[0]-1, default_idx, 1, key="slice_slider")
     slice_img = normalize_slice(vol[idx])
     st.image(slice_img, caption=f"Axial slice {idx}/{vol.shape[0]-1}", use_container_width=True)
     return vol, orientation, idx
@@ -237,13 +238,18 @@ if mode == "DICOM (.zip/.dcm)":
     if volume is None:
         st.stop()
 
-    def prep_slice(slice2d, img_size):
-        r = cv2.resize(slice2d, img_size)
-        r_rgb = np.stack([r, r, r], axis=-1) / 255.0
-        return np.expand_dims(r_rgb, 0), r_rgb.astype("uint8")
+    def prep_slice(slice2d, size):
+        # resize to model size
+        s = cv2.resize(slice2d, size)
+        # normalize 0–255 for display
+        disp = ((s - s.min()) / (s.ptp() + 1e-8) * 255).astype("uint8")
+        rgb_disp = np.stack([disp, disp, disp], axis=-1)         # (H,W,3)
+        model_in = np.expand_dims(rgb_disp / 255.0, 0).astype("float32")
+        return model_in, rgb_disp
 
-    # use user-selected slice
+    # use the user-selected slice
     img_array, original_img_for_display = prep_slice(volume[slice_idx], img_size)
+
     run_all = st.checkbox("Analyze all slices", value=False)
     if run_all:
         vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)

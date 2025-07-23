@@ -347,5 +347,5 @@ explanation = safe_explanation(saliency_map_path,result,float(prediction[0][clas
 st.write("## Explanation")
 st.write(explanation)
 
-pdf_bytes = build_report_pdf(original_img_for_display, superimposed_imgresult, float(prediction[0][class_index]), explanation, probs=prediction[0], labels=LABELS)
+pdf_bytes = build_report_pdf(original_img_for_display, superimposed_img, float(prediction[0][class_index]), explanation, probs=prediction[0], labels=LABELS)
 st.download_button("📄 Download Report as PDF", data=pdf_bytes, file_name="brain_tumor_report.pdf", mime="application/pdf")

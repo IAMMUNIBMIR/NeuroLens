@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from src.explain.fallback_text import compute_saliency_stats, rule_based_explanation
 from src.explain.pdf_report import build_report_pdf
 from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
+from src.visualize.slice_plots import plot_slice_probabilities
 tf.keras.backend.clear_session()
 
 # ---------------------- constants/helpers --------------------------
@@ -297,7 +298,8 @@ if mode == "DICOM (.zip/.dcm)":
 
         no_tumor_idx = LABELS.index("No tumor")
         tumor_probs = 1.0 - preds[:, no_tumor_idx]
-        st.line_chart(tumor_probs, use_container_width=True)
+        fig = plot_slice_probabilities(preds, LABELS)
+        st.plotly_chart(fig, use_container_width=True)
         suspicious_idx = int(tumor_probs.argmax())
         st.write(f"Most suspicious slice: {suspicious_idx}")
         if st.button("Jump to that slice"):

@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from src.explain.fallback_text import compute_saliency_stats, rule_based_explanation
 from src.explain.pdf_report import build_report_pdf
 from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
-from src.visualize.slice_plots import plot_slice_probabilities
+from src.visualize.slice_plots import plot_slice_bar_chart
 tf.keras.backend.clear_session()
 
 # ---------------------- constants/helpers --------------------------
@@ -247,8 +247,8 @@ if mode == "DICOM (.zip/.dcm)":
     if run_all:
         with st.spinner("Running model on all slices..."):
             vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
-            vol_rgb = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
-            preds = model(tf.convert_to_tensor(vol_rgb), training=False).numpy()
+            vol_rgb     = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
+            preds       = model.predict(vol_rgb, verbose=0)  
 
             # 1) build the saliency stack for every slice
             saliency_stack = []
@@ -270,36 +270,11 @@ if mode == "DICOM (.zip/.dcm)":
             st.download_button("Download slice metrics as CSV", data=csv_str, file_name="slice_metrics.csv", mime="text/csv")
 
             # 4) plot the per‑slice bar chart using the same preds array:
-            slice_probs = preds[slice_idx]             # e.g. [0.0001, 0.0131, 0.9867, …]
-            slice_labels = LABELS
-
-            # reorder descending for the chart
-            sorted_idx   = np.argsort(slice_probs)[::-1]
-            sorted_labels= [slice_labels[i] for i in sorted_idx]
-            sorted_probs = slice_probs[sorted_idx]
-
-            fig2 = go.Figure(go.Bar(
-                x=sorted_probs,
-                y=sorted_labels,
-                orientation='h',
-                marker_color=['red' if lbl==sorted_labels[0] else 'blue'
-                            for lbl in sorted_labels]
-            ))
-            fig2.update_layout(
-                title=f"Slice {slice_idx} Probabilities",
-                xaxis_title="Probability",
-                yaxis_title="Class",
-                yaxis=dict(autorange="reversed")
-            )
-            for i, p in enumerate(sorted_probs):
-                fig2.add_annotation(x=p, y=i, text=f"{p:.4f}", showarrow=False, xanchor="left", xshift=5)
-
+            fig2 = plot_slice_bar_chart(preds, slice_idx, LABELS)
             st.plotly_chart(fig2, use_container_width=True)
 
         no_tumor_idx = LABELS.index("No tumor")
         tumor_probs = 1.0 - preds[:, no_tumor_idx]
-        fig = plot_slice_probabilities(preds, LABELS)
-        st.plotly_chart(fig, use_container_width=True)
         suspicious_idx = int(tumor_probs.argmax())
         st.write(f"Most suspicious slice: {suspicious_idx}")
         if st.button("Jump to that slice"):

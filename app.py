@@ -97,7 +97,7 @@ def generate_saliency_map(model, img_array, class_index, img_size):
         img_tensor = tf.convert_to_tensor(img_array)
         tape.watch(img_tensor)
         # just call the model directly:
-        predictions = model(img_tensor, training=False)
+        predictions = model(img_tensor)
         target_class = predictions[:, class_index]
 
     gradients = tape.gradient(target_class, img_tensor)

@@ -262,7 +262,7 @@ if mode == "DICOM (.zip/.dcm)":
 
             # 2) generate GIF
             gif_bytes = generate_slice_gif(vol_resized, saliency_stack, duration=0.1)
-            st.image(gif_bytes, format="GIF", caption="3D walkthrough (auto‐loop)")
+            st.image(gif_bytes, caption="3D walkthrough (auto‐loop)", output_format="GIF", use_column_width=True)
 
             # 3) generate CSV
             csv_str = build_slice_metrics_csv(preds, LABELS)

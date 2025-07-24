@@ -15,6 +15,7 @@ from keras.optimizers import Adamax
 from keras.metrics import Precision, Recall
 from keras.preprocessing import image
 import google.generativeai as genai
+from streamlit.runtime.scriptrunner import RerunException
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -291,7 +292,7 @@ if mode == "DICOM (.zip/.dcm)":
         st.write(f"Most suspicious slice: {suspicious_idx}")
         if st.button("Jump to that slice"):
             st.session_state["slice_slider_force"] = suspicious_idx
-            st.experimental.rerun()
+            raise RerunException()
 
 else:
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])

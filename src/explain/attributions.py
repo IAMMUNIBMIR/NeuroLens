@@ -21,24 +21,26 @@ def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
 
 def compute_shap_values(model, img_tensor, class_index, nsamples=50):
     """
-    Returns a normalized SHAP heatmap H×W for the given class_index.
+    Returns a normalized SHAP heatmap (H×W) for the given class_index.
+    Uses the new shap.Explainer interface.
     """
     # 1×H×W×C zero baseline
     background = np.zeros((1,) + img_tensor.shape[1:], dtype=img_tensor.dtype)
 
-    # Build a Keras model that outputs only the class_index score
-    class_score = tf.keras.layers.Lambda(
-        lambda x: tf.expand_dims(x[:, class_index], axis=-1),
-        output_shape=(1,),
-        name="shap_class_select"
-    )(model.output)
-    single_model = tf.keras.Model(inputs=model.inputs, outputs=class_score)
+    # 1) build the Explainer once
+    explainer = shap.Explainer(model, background)
 
-    # Now DeepExplainer sees a single-output Keras model
-    explainer = shap.DeepExplainer(single_model, background.astype(np.float32))
-    # shap_vals: list of arrays (one per output), here just one element
-    shap_vals = explainer.shap_values(img_tensor.astype(np.float32))
-    arr = shap_vals[0] if isinstance(shap_vals, list) else shap_vals
-    # arr has shape (1, H, W, C). Collapse batch and channels:
-    heatmap = np.abs(arr[0]).sum(-1)
+    # 2) explain your single example (max_evals trades off speed vs. accuracy)
+    explanation = explainer(img_tensor, max_evals=nsamples)
+
+    # 3) get the raw SHAP values array
+    #    - explanation.values has shape (1, H, W, C)
+    vals = explanation.values  # np.ndarray
+
+    # 4) grab just your class_index channel and collapse any channels
+    #    (for e.g. RGB input you'd do sum over the last axis, etc.)
+    #    Here `vals[0,…,class_index]` is H×W
+    heatmap = np.abs(vals[0, ..., class_index])
+
+    # 5) normalize
     return heatmap / (heatmap.max() + 1e-8)

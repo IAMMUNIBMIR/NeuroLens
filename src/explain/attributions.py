@@ -1,43 +1,49 @@
-import numpy as np
+import tensorflow as tf
+
+from tensorflow.keras.layers import ReLU
+tf.keras.layers.ThresholdedReLU = ReLU
+
 from tf_explain.core.integrated_gradients import IntegratedGradients
 import shap
+import numpy as np
 
 def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
     """
-    model: tf.keras Model
-    img_tensor: np.array shape (1, H, W, C), values [0–1]
-    class_index: int, target class
-    baseline: same shape as img_tensor or None to use zeros
-    returns: np.array H×W saliency map (float32)
+    model: tf.keras.Model
+    img_tensor: numpy array shape (1,H,W,3)
+    class_index: int
+    baseline: same shape as img_tensor or None
+    returns: numpy array (H,W) scaled [0..1]
     """
-    explainer = IntegratedGradients()
-    data = (img_tensor, None)
-    # tf‑explain wants a dict of {‘0’: model}, so we wrap:
-    attributions = explainer.explain(
-        data, 
-        model, 
-        class_index=class_index, 
-        baseline=baseline, 
-        n_steps=50
-    )
-    # attributions is H×W×C; collapse to grayscale
-    ig_map = np.mean(attributions, axis=-1)
-    # normalize to [0,1]
-    ig_map -= ig_map.min()
-    if ig_map.max() > 0:
-        ig_map /= ig_map.max()
-    return ig_map.astype("float32")
+    ig = IntegratedGradients()
+    data = (img_tensor, None)  # second arg is labels placeholder
+    expl = ig.explain(data,
+                      model,
+                      class_index,
+                      baseline=baseline or np.zeros_like(img_tensor),
+                      n_steps=50)
+    heatmap = expl["attributions"]  # shape (H,W)
+    # normalize
+    heatmap = np.maximum(heatmap, 0)
+    heatmap /= heatmap.max() + 1e-8
+    return heatmap
 
-def compute_shap_values(model, background, img_tensor):
+def compute_shap_values(model, img_tensor, nsamples=50):
     """
-    model: tf.keras Model
-    background: np.array shape (B, H, W, C)
-    img_tensor: np.array shape (1, H, W, C)
-    returns: shap_values for each class: list of np.array (1, H, W, C)
+    model: tf.keras.Model
+    img_tensor: numpy array shape (1,H,W,3)
+    nsamples: int
+    returns: dict[class_idx → numpy array (H,W)]
     """
-    # wrap model for SHAP
-    f = lambda x: model(x).numpy()
-    explainer = shap.DeepExplainer(f, background)
-    shap_vals = explainer.shap_values(img_tensor)  
-    # shap_vals is list of arrays per class
-    return shap_vals
+    # use a tiny set of background samples (here zeros)
+    background = np.zeros((1,) + img_tensor.shape[1:], dtype=img_tensor.dtype)
+    explainer = shap.DeepExplainer((model, model.inputs), background)
+    shap_values = explainer.shap_values(img_tensor, nsamples=nsamples)
+    # shap_values is a list of C arrays each (1,H,W,3)
+    heatmaps = {}
+    for cls_idx, arr in enumerate(shap_values):
+        # sum across channels & normalize
+        hm = np.abs(arr[0]).sum(-1)
+        hm /= hm.max() + 1e-8
+        heatmaps[cls_idx] = hm
+    return heatmaps

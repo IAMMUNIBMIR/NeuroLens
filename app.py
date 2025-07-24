@@ -283,15 +283,6 @@ if mode == "DICOM (.zip/.dcm)":
             fig2 = plot_slice_bar_chart(preds, slice_idx, LABELS)
             st.plotly_chart(fig2, use_container_width=True)
 
-        # KEEP “most suspicious slice” logic, without the line chart above
-        no_tumor_idx  = LABELS.index("No tumor")
-        tumor_probs   = 1.0 - preds[:, no_tumor_idx]
-        suspicious_idx = int(tumor_probs.argmax())
-        st.write(f"Most suspicious slice: {suspicious_idx}")
-        if st.button("Jump to that slice"):
-            st.session_state["slice_slider_force"] = suspicious_idx
-            raise RerunException()
-
 else:
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
     if not uploaded_file:

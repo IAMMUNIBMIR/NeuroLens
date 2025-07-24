@@ -262,16 +262,38 @@ if mode == "DICOM (.zip/.dcm)":
 
             # 2) generate GIF
             gif_bytes = generate_slice_gif(vol_resized, saliency_stack, duration=0.1)
-            st.image(gif_bytes, caption="3D walkthrough (auto‐loop)", output_format="GIF", use_column_width=True)
+            st.image(gif_bytes, caption="3D walkthrough (auto‐loop)", output_format="GIF", use_container_width=True)
 
             # 3) generate CSV
             csv_str = build_slice_metrics_csv(preds, LABELS)
-            st.download_button(
-                "Download slice metrics as CSV",
-                data=csv_str,
-                file_name="slice_metrics.csv",
-                mime="text/csv"
+            st.download_button("Download slice metrics as CSV", data=csv_str, file_name="slice_metrics.csv", mime="text/csv")
+
+            # 4) plot the per‑slice bar chart using the same preds array:
+            slice_probs = preds[slice_idx]             # e.g. [0.0001, 0.0131, 0.9867, …]
+            slice_labels = LABELS
+
+            # reorder descending for the chart
+            sorted_idx   = np.argsort(slice_probs)[::-1]
+            sorted_labels= [slice_labels[i] for i in sorted_idx]
+            sorted_probs = slice_probs[sorted_idx]
+
+            fig2 = go.Figure(go.Bar(
+                x=sorted_probs,
+                y=sorted_labels,
+                orientation='h',
+                marker_color=['red' if lbl==sorted_labels[0] else 'blue'
+                            for lbl in sorted_labels]
+            ))
+            fig2.update_layout(
+                title=f"Slice {slice_idx} Probabilities",
+                xaxis_title="Probability",
+                yaxis_title="Class",
+                yaxis=dict(autorange="reversed")
             )
+            for i, p in enumerate(sorted_probs):
+                fig2.add_annotation(x=p, y=i, text=f"{p:.4f}", showarrow=False, xanchor="left", xshift=5)
+
+            st.plotly_chart(fig2, use_container_width=True)
 
         no_tumor_idx = LABELS.index("No tumor")
         tumor_probs = 1.0 - preds[:, no_tumor_idx]

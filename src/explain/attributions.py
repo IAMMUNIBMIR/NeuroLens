@@ -1,13 +1,9 @@
+# src/explain/attributions.py
 import numpy as np
 import tensorflow as tf
-import shap
 from tf_explain.core.integrated_gradients import IntegratedGradients
-from keras.layers     import Lambda
-from keras.models     import Model
 
-if not hasattr(tf.keras.backend, "learning_phase"):
-    tf.keras.backend.learning_phase = lambda: 0
-
+# ---------------- Integrated Gradients (as you already had) ---------------- #
 def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
     ig = IntegratedGradients()
     expl = ig.explain(
@@ -24,30 +20,54 @@ def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
     return heatmap / (heatmap.max() + 1e-8)
 
 
-def compute_shap_values(model, img_tensor, class_index, nsamples=50):
+# ---------------- “GradSHAP‑lite”: SHAP‑style but no SHAP dependency -------- #
+def compute_shap_values(
+    model,
+    img_tensor,
+    class_index,
+    nsamples: int = 20,
+    baseline: str = "zeros",
+):
     """
-    Returns a normalized H×W SHAP heatmap for the given class_index,
-    using shap.GradientExplainer on a single-output Keras Model.
+    A lightweight SHAP-like attribution (gradient * (x - baseline)) averaged
+    over multiple random baselines (if baseline == 'random'). This avoids the
+    incompatibilities between shap and TF/Keras 3, but gives you a similar
+    qualitative visualization.
+
+    Returns: (H, W) normalized heatmap in [0, 1].
     """
-    # 1×H×W×C zero baseline
-    background = np.zeros((1,) + img_tensor.shape[1:], dtype=img_tensor.dtype)
+    x = tf.convert_to_tensor(img_tensor, dtype=tf.float32)  # (1,H,W,C)
 
-    # 1) carve out just the score for our class from the multi‑class model:
-    class_output = Lambda(
-        lambda x: tf.expand_dims(x[:, class_index], axis=-1),
-        output_shape=(1,),
-        name="shap_class_select"
-    )(model.output)
+    def make_baseline():
+        if baseline == "zeros":
+            return tf.zeros_like(x)
+        elif baseline == "mean":
+            return tf.fill(tf.shape(x), tf.reduce_mean(x))
+        elif baseline == "random":
+            return tf.random.uniform(tf.shape(x), 0.0, 1.0, dtype=tf.float32)
+        else:
+            # default to zeros if unknown
+            return tf.zeros_like(x)
 
-    single_model = Model(inputs=model.inputs, outputs=class_output)
+    heat_sum = None
 
-    # 2) build the explainer on that single-output model
-    explainer = shap.GradientExplainer(single_model, background)
+    for _ in range(nsamples):
+        b = make_baseline()
+        with tf.GradientTape() as tape:
+            tape.watch(x)
+            preds = model(x, training=False)[:, class_index]  # (1,)
+        grads = tape.gradient(preds, x)  # (1,H,W,C)
 
-    # 3) get attributions (no batch_size arg)
-    shap_vals = explainer.shap_values(img_tensor)
+        # SHAP-ish attribution: gradient * (x - baseline)
+        contrib = grads * (x - b)
+        # collapse channels, abs and reduce to HxW
+        heat = tf.reduce_sum(tf.math.abs(contrib), axis=-1)[0]  # (H,W)
 
-    # 4) collapse channels → (H, W), take absolute & normalize
-    arr     = shap_vals[0][0]          # from list-of-length‑1
-    heatmap = np.abs(arr).sum(-1)      # shape (H, W)
-    return heatmap / (heatmap.max() + 1e-8)
+        if heat_sum is None:
+            heat_sum = heat.numpy()
+        else:
+            heat_sum += heat.numpy()
+
+    heatmap = heat_sum / nsamples
+    heatmap = heatmap / (heatmap.max() + 1e-8)
+    return heatmap

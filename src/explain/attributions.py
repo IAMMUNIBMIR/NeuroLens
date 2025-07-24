@@ -1,3 +1,5 @@
+# src/explain/attributions.py
+
 import numpy as np
 import tensorflow as tf
 import shap
@@ -21,14 +23,16 @@ def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
 
 def compute_shap_values(model, img_tensor, class_index, nsamples=50):
     """
-    Returns a normalized H×W SHAP heatmap for the given class_index.
+    Returns a normalized H×W SHAP heatmap for class_index.
     """
-    # 1×H×W×C zero‐baseline
+    # zero‐baseline of same H×W×C
     background = np.zeros((1,) + img_tensor.shape[1:], dtype=img_tensor.dtype)
 
-    # build a new Keras Model that outputs only the single‐class score:
+    # build a Keras Model that outputs only the selected class’s score
+    # slicing inside a Lambda needs an explicit output_shape=(1,)
     class_output = tf.keras.layers.Lambda(
         lambda x: tf.expand_dims(x[:, class_index], axis=-1),
+        output_shape=(1,),
         name="shap_class_select"
     )(model.output)
     single_model = tf.keras.Model(inputs=model.inputs, outputs=class_output)

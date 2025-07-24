@@ -13,7 +13,6 @@ def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
         data,
         model,
         class_index,
-        baseline=baseline or np.zeros_like(img_tensor),
         n_steps=50
     )
     heatmap = expl["attributions"]  # shape (H,W)

@@ -15,7 +15,13 @@ def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
         class_index,
         n_steps=15
     )
-    heatmap = expl["attributions"]  # shape (H,W)
+    
+    if isinstance(expl, dict):
+        # some future versions might do {"attributions": arr, ...}
+        heatmap = expl.get("attributions", next(iter(expl.values())))
+    else:
+        heatmap = expl
+        
     heatmap = np.clip(heatmap, 0, None)
     return heatmap / (heatmap.max() + 1e-8)
 

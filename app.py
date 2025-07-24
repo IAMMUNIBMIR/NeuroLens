@@ -91,10 +91,15 @@ def safe_explanation(img_path, pred_label, confidence, saliency_map,probs, label
 
 
 def generate_saliency_map(model, img_array, class_index, img_size):
-    with tf.GradientTape() as tape:
-        img_tensor = tf.convert_to_tensor(img_array); tape.watch(img_tensor)
-        predictions = model(img_tensor)
-        target_class = predictions[:, class_index]
+    img_tensor = tf.convert_to_tensor(img_array)
+    with tf.name_scope("saliency"):
+        with tf.GradientTape() as tape:
+            tape.watch(img_tensor)
+            # force inference mode & isolate in its own name_scope
+            with tf.name_scope("model_forward"):
+                predictions = model(img_tensor, training=False)
+                target_class = predictions[:, class_index]
+
     gradients = tape.gradient(target_class, img_tensor)
     gradients = tf.math.abs(gradients)
     gradients = tf.reduce_max(gradients, axis=-1).numpy().squeeze()
@@ -248,33 +253,40 @@ if mode == "DICOM (.zip/.dcm)":
         with st.spinner("Running model on all slices..."):
             vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
             vol_rgb     = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
-            preds       = model.predict(vol_rgb, verbose=0)  
+            preds       = model.predict(vol_rgb, verbose=0)
 
             # 1) build the saliency stack for every slice
             saliency_stack = []
             for i in range(vol_resized.shape[0]):
-                # use your existing generate_saliency_map
-                sm = generate_saliency_map(model,
-                    vol_rgb[i:i+1],                # shape (1,H,W,3)
-                    np.argmax(preds[i]),           # class index
-                    img_size)
+                sm = generate_saliency_map(
+                    model,
+                    vol_rgb[i:i+1],           # (1, H, W, 3)
+                    np.argmax(preds[i]),      # class index
+                    img_size
+                )
                 saliency_stack.append(sm)
             saliency_stack = np.stack(saliency_stack, axis=0)  # (S, H, W)
 
             # 2) generate GIF
             gif_bytes = generate_slice_gif(vol_resized, saliency_stack, duration=0.1)
-            st.image(gif_bytes, caption="3D walkthrough (auto‐loop)", output_format="GIF", use_container_width=True)
+            st.image(
+                gif_bytes,
+                caption="3D walkthrough (auto‐loop)",
+                output_format="GIF",
+                use_container_width=True
+            )
 
             # 3) generate CSV
             csv_str = build_slice_metrics_csv(preds, LABELS)
             st.download_button("Download slice metrics as CSV", data=csv_str, file_name="slice_metrics.csv", mime="text/csv")
 
-            # 4) plot the per‑slice bar chart using the same preds array:
+            # 4) per‑slice bar chart (for current slider index)
             fig2 = plot_slice_bar_chart(preds, slice_idx, LABELS)
             st.plotly_chart(fig2, use_container_width=True)
 
-        no_tumor_idx = LABELS.index("No tumor")
-        tumor_probs = 1.0 - preds[:, no_tumor_idx]
+        # KEEP “most suspicious slice” logic, without the line chart above
+        no_tumor_idx  = LABELS.index("No tumor")
+        tumor_probs   = 1.0 - preds[:, no_tumor_idx]
         suspicious_idx = int(tumor_probs.argmax())
         st.write(f"Most suspicious slice: {suspicious_idx}")
         if st.button("Jump to that slice"):

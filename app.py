@@ -291,7 +291,7 @@ if mode == "DICOM (.zip/.dcm)":
         st.write(f"Most suspicious slice: {suspicious_idx}")
         if st.button("Jump to that slice"):
             st.session_state["slice_slider_force"] = suspicious_idx
-            st.experimental_rerun()
+            st.experimental.rerun()
 
 else:
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])

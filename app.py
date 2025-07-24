@@ -92,14 +92,12 @@ def safe_explanation(img_path, pred_label, confidence, saliency_map,probs, label
 
 
 def generate_saliency_map(model, img_array, class_index, img_size):
-    img_tensor = tf.convert_to_tensor(img_array)
-    with tf.name_scope("saliency"):
-        with tf.GradientTape() as tape:
-            tape.watch(img_tensor)
-            # force inference mode & isolate in its own name_scope
-            with tf.name_scope("model_forward"):
-                predictions = model(img_tensor, training=False)
-                target_class = predictions[:, class_index]
+    with tf.GradientTape() as tape:
+        img_tensor = tf.convert_to_tensor(img_array)
+        tape.watch(img_tensor)
+        # just call the model directly:
+        predictions = model(img_tensor, training=False)
+        target_class = predictions[:, class_index]
 
     gradients = tape.gradient(target_class, img_tensor)
     gradients = tf.math.abs(gradients)

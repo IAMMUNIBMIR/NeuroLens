@@ -84,12 +84,6 @@ def build_report_pdf(
     for i, line in enumerate(lines):
         c.drawString(margin, expl_start_y - 14*(i+1), line)
 
-    # ——— Footer with page number ——————————————————————————————————————
-    c.showPage()
-    page_str = f"Page 1"
-    c.setFont("Helvetica", 8)
-    c.drawRightString(width - 40, 20, page_str)
-
     c.save()
     buffer.seek(0)
     return buffer.read()

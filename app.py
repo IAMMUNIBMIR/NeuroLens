@@ -21,6 +21,7 @@ from reportlab.pdfgen import canvas
 from dotenv import load_dotenv
 from src.explain.fallback_text import compute_saliency_stats, rule_based_explanation
 from src.explain.pdf_report import build_report_pdf
+from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
 tf.keras.backend.clear_session()
 
 # ---------------------- constants/helpers --------------------------
@@ -247,6 +248,31 @@ if mode == "DICOM (.zip/.dcm)":
             vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
             vol_rgb = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
             preds = model(tf.convert_to_tensor(vol_rgb), training=False).numpy()
+
+            # 1) build the saliency stack for every slice
+            saliency_stack = []
+            for i in range(vol_resized.shape[0]):
+                # use your existing generate_saliency_map
+                sm = generate_saliency_map(model,
+                    vol_rgb[i:i+1],                # shape (1,H,W,3)
+                    np.argmax(preds[i]),           # class index
+                    img_size)
+                saliency_stack.append(sm)
+            saliency_stack = np.stack(saliency_stack, axis=0)  # (S, H, W)
+
+            # 2) generate GIF
+            gif_bytes = generate_slice_gif(vol_resized, saliency_stack, duration=0.1)
+            st.image(gif_bytes, format="GIF", caption="3D walkthrough (auto‐loop)")
+
+            # 3) generate CSV
+            csv_str = build_slice_metrics_csv(preds, LABELS)
+            st.download_button(
+                "Download slice metrics as CSV",
+                data=csv_str,
+                file_name="slice_metrics.csv",
+                mime="text/csv"
+            )
+
         no_tumor_idx = LABELS.index("No tumor")
         tumor_probs = 1.0 - preds[:, no_tumor_idx]
         st.line_chart(tumor_probs, use_container_width=True)

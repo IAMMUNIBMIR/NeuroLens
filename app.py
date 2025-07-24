@@ -388,17 +388,9 @@ with tabs[1]:
     st.image(overlay_ig, caption="Integrated Gradients", use_container_width=True)
 
 with tabs[2]:
-    # choose a small background set—e.g. 10 random slices or just original_img_for_display
-    background = np.repeat(original_img_for_display[None,...]/255.0, 10, axis=0)
-    shap_vals = attributions.compute_shap_values(
-        model, background, img_array
-    )
-    # show SHAP for the predicted class:
-    sv = shap_vals[class_index][0]  # H×W×C
-    shap_map = np.mean(np.abs(sv), axis=-1)
-    # normalize & overlay
-    shap_map -= shap_map.min()
-    shap_map /= shap_map.max()
+    shap_map = attributions.compute_shap_values(model, img_array, class_index)
+
+    # colourize & overlay exactly like IG
     heat_shap = cv2.applyColorMap((shap_map*255).astype("uint8"), cv2.COLORMAP_PLASMA)
     overlay_shap = (0.6*heat_shap + 0.4*original_img_for_display).astype("uint8")
     st.image(overlay_shap, caption="SHAP DeepExplainer", use_container_width=True)

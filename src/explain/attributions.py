@@ -26,13 +26,13 @@ def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
 
 def compute_shap_values(model, img_tensor, class_index, nsamples=50):
     """
-    Returns a normalized H×W SHAP heatmap for the given class_index
-    using shap.GradientExplainer on a single‐output Keras model.
+    Returns a normalized H×W SHAP heatmap for the given class_index,
+    using shap.GradientExplainer on a single-output Keras Model.
     """
-    # zero baseline batch of shape (1,H,W,C)
+    # 1×H×W×C zero baseline
     background = np.zeros((1,) + img_tensor.shape[1:], dtype=img_tensor.dtype)
 
-    # 1) slice out just the class_index score from your multi‐class model:
+    # 1) carve out just the score for our class from the multi‑class model:
     class_output = Lambda(
         lambda x: tf.expand_dims(x[:, class_index], axis=-1),
         output_shape=(1,),
@@ -41,13 +41,13 @@ def compute_shap_values(model, img_tensor, class_index, nsamples=50):
 
     single_model = Model(inputs=model.inputs, outputs=class_output)
 
-    # 2) build the GradientExplainer on that single‐output model
+    # 2) build the explainer on that single-output model
     explainer = shap.GradientExplainer(single_model, background)
 
-    # 3) get attributions: list of length 1, each array (batch, H, W, C)
-    shap_vals = explainer.shap_values(img_tensor, batch_size=1)
+    # 3) get attributions (no batch_size arg)
+    shap_vals = explainer.shap_values(img_tensor)
 
-    # 4) collapse to H×W, take absolute and normalize
-    arr     = shap_vals[0][0]           # (H, W, C)
-    heatmap = np.abs(arr).sum(-1)       # (H, W)
+    # 4) collapse channels → (H, W), take absolute & normalize
+    arr     = shap_vals[0][0]          # from list-of-length‑1
+    heatmap = np.abs(arr).sum(-1)      # shape (H, W)
     return heatmap / (heatmap.max() + 1e-8)

@@ -13,7 +13,7 @@ def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
         data,
         model,
         class_index,
-        n_steps=50
+        n_steps=15
     )
     heatmap = expl["attributions"]  # shape (H,W)
     heatmap = np.clip(heatmap, 0, None)

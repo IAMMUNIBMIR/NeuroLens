@@ -1,16 +1,8 @@
-import sys
-import types
-
-import keras
-tfk = types.ModuleType("tensorflow.keras")
-sys.modules["tensorflow.keras"] = tfk
-
-sys.modules["tensorflow.keras.callbacks"] = keras.callbacks
-sys.modules["tensorflow.keras.layers"] = keras.layers
-sys.modules["tensorflow.keras.utils"] = keras.utils
-
-import numpy as np
 import tensorflow as tf
+
+from tensorflow.keras import layers
+tf.keras.layers.ThresholdedReLU = layers.ReLU
+
 from tf_explain.core.integrated_gradients import IntegratedGradients
 import shap
 

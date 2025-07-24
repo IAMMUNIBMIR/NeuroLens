@@ -1,5 +1,3 @@
-# src/explain/attributions.py
-
 import numpy as np
 import tensorflow as tf
 import shap
@@ -23,24 +21,20 @@ def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
 
 def compute_shap_values(model, img_tensor, class_index, nsamples=50):
     """
-    Returns a normalized H×W SHAP heatmap for class_index.
+    Returns a normalized SHAP heatmap (H×W) for class_index.
+    Uses GradientExplainer under TF‑2 (no need to wrap in a Keras Model).
     """
-    # zero‐baseline of same H×W×C
+    # 1×H×W×C zero baseline
     background = np.zeros((1,) + img_tensor.shape[1:], dtype=img_tensor.dtype)
 
-    # build a Keras Model that outputs only the selected class’s score
-    # slicing inside a Lambda needs an explicit output_shape=(1,)
-    class_output = tf.keras.layers.Lambda(
-        lambda x: tf.expand_dims(x[:, class_index], axis=-1),
-        output_shape=(1,),
-        name="shap_class_select"
-    )(model.output)
-    single_model = tf.keras.Model(inputs=model.inputs, outputs=class_output)
+    # use the gradient explainer (eager mode)
+    explainer = shap.GradientExplainer(model, background)
+    # this returns a list of arrays, one per class, each shape (1,H,W,C)
+    all_shap_vals = explainer.shap_values(img_tensor, nsamples=nsamples)
+    # pick out the one for our class:
+    shap_for_class = all_shap_vals[class_index]  # shape (1, H, W, C)
 
-    explainer = shap.DeepExplainer(single_model, background)
-    # shap_vals[0] has shape (1, H, W, C)
-    shap_vals = explainer.shap_values(img_tensor, nsamples=nsamples)[0]
-
-    # collapse channels and normalize
-    heatmap = np.abs(shap_vals[0]).sum(-1)
+    # collapse color channels and normalize to [0,1]
+    heatmap = np.abs(shap_for_class[0]).sum(-1)   # now H×W
     return heatmap / (heatmap.max() + 1e-8)
+

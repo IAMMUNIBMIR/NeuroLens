@@ -1,11 +1,11 @@
-import tensorflow as tf
+import numpy as np
+import keras
+from keras.layers import ReLU
 
-from tensorflow.keras.layers import ReLU
-tf.keras.layers.ThresholdedReLU = ReLU
+keras.layers.ThresholdedReLU = ReLU
 
 from tf_explain.core.integrated_gradients import IntegratedGradients
 import shap
-import numpy as np
 
 def compute_integrated_gradients(model, img_tensor, class_index, baseline=None):
     """

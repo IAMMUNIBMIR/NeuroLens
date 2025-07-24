@@ -24,6 +24,7 @@ from src.explain.fallback_text import compute_saliency_stats, rule_based_explana
 from src.explain.pdf_report import build_report_pdf
 from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
 from src.visualize.slice_plots import plot_slice_bar_chart
+import src.explain.attributions as attributions
 tf.keras.backend.clear_session()
 
 # ---------------------- constants/helpers --------------------------
@@ -375,3 +376,29 @@ st.write(explanation)
 
 pdf_bytes = build_report_pdf(original_img_for_display, superimposed_img, result, float(prediction[0][class_index]), explanation, probs=prediction[0], labels=LABELS)
 st.download_button("📄 Download Report as PDF", data=pdf_bytes, file_name="brain_tumor_report.pdf", mime="application/pdf")
+
+tabs = st.tabs(["Rule‑based / Gemini", "Integrated Gradients", "SHAP"])
+with tabs[1]:
+    ig_map = attributions.compute_integrated_gradients(
+        model, img_array, class_index
+    )
+    # overlay on original_img_for_display similar to saliency:
+    heat_ig = cv2.applyColorMap((ig_map*255).astype("uint8"), cv2.COLORMAP_VIRIDIS)
+    overlay_ig = (0.6*heat_ig + 0.4*original_img_for_display).astype("uint8")
+    st.image(overlay_ig, caption="Integrated Gradients", use_container_width=True)
+
+with tabs[2]:
+    # choose a small background set—e.g. 10 random slices or just original_img_for_display
+    background = np.repeat(original_img_for_display[None,...]/255.0, 10, axis=0)
+    shap_vals = attributions.compute_shap_values(
+        model, background, img_array
+    )
+    # show SHAP for the predicted class:
+    sv = shap_vals[class_index][0]  # H×W×C
+    shap_map = np.mean(np.abs(sv), axis=-1)
+    # normalize & overlay
+    shap_map -= shap_map.min()
+    shap_map /= shap_map.max()
+    heat_shap = cv2.applyColorMap((shap_map*255).astype("uint8"), cv2.COLORMAP_PLASMA)
+    overlay_shap = (0.6*heat_shap + 0.4*original_img_for_display).astype("uint8")
+    st.image(overlay_shap, caption="SHAP DeepExplainer", use_container_width=True)

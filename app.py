@@ -389,6 +389,7 @@ with tabs[1]:
 
 with tabs[2]:
     shap_map = attributions.compute_shap_values(model, img_array, class_index)
-    heat_shap = cv2.applyColorMap((shap_map*255).astype("uint8"), cv2.COLORMAP_PLASMA)
+    heat_shap = cv2.applyColorMap((shap_map*255).astype("uint8"),
+                                  cv2.COLORMAP_PLASMA)
     overlay_shap = (0.6*heat_shap + 0.4*original_img_for_display).astype("uint8")
     st.image(overlay_shap, caption="SHAP DeepExplainer", use_container_width=True)

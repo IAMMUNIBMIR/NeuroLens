@@ -8,6 +8,8 @@ import streamlit as st
 import plotly.graph_objects as go
 import PIL.Image
 import tensorflow as tf
+import hashlib
+import requests
 
 from keras.models import load_model, Sequential
 from keras.layers import Dense, Dropout, Flatten
@@ -27,6 +29,72 @@ from src.visualize.slice_plots import plot_slice_bar_chart
 import src.explain.attributions as attributions
 from src.seg import segment
 tf.keras.backend.clear_session()
+
+# ---------------------- NEW: model downloader + checksum + cached loader -----
+from typing import Optional
+
+def _sha256(path: Path) -> str:
+    """Compute sha256 of a file and return 'sha256:<hex>'."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
+
+def _download_and_verify(url: str, dst: Path, expected_sha: Optional[str] = None) -> Path:
+    """
+    Download url -> dst atomically, verify sha256 if provided, and return dst.
+    Reuses existing file if already present (and matches checksum when given).
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    # Reuse a good existing file
+    if dst.exists() and dst.stat().st_size > 0:
+        if expected_sha is None or _sha256(dst) == expected_sha:
+            return dst
+        else:
+            dst.unlink(missing_ok=True)  # bad file; redownload
+
+    # Download to a temp file first
+    tmp = dst.with_suffix(dst.suffix + ".part")
+    with requests.get(url, stream=True, timeout=300) as r:
+        r.raise_for_status()
+        with open(tmp, "wb") as f:
+            for chunk in r.iter_content(1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+    # Verify checksum if provided
+    if expected_sha is not None:
+        actual = _sha256(tmp)
+        if actual != expected_sha:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Model checksum mismatch.\nExpected: {expected_sha}\nActual:   {actual}"
+            )
+
+    tmp.replace(dst)  # atomic move
+    return dst
+
+@st.cache_resource(show_spinner="Loading model…")
+def get_model(kind: str = "cnn"):
+    """
+    Download + cache model file (once per container), verify sha256, load with Keras,
+    and cache the loaded model object for reuse.
+    """
+    models_dir = Path("models"); models_dir.mkdir(parents=True, exist_ok=True)
+    if kind == "xception":
+        url  = st.secrets["MODEL_XCP_URL"]
+        sha  = st.secrets.get("xception_model_sha")
+        path = models_dir / "xception_full.keras"
+    else:
+        url  = st.secrets["MODEL_CNN_URL"]
+        sha  = st.secrets.get("cnn_model_sha")
+        path = models_dir / "cnn_model.keras"
+
+    _download_and_verify(url, path, expected_sha=sha)
+    return load_model(path, compile=False)
+# -----------------------------------------------------------------------------
 
 # ---------------------- constants/helpers --------------------------
 LABELS = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
@@ -243,23 +311,16 @@ if run_seg:
 st.title("Brain Tumor Classification")
 st.write("Upload an image of a brain MRI scan to classify.")
 
-@st.cache_resource
-def get_models():
-    # clear any lingering state
-    tf.keras.backend.clear_session()
-    xcep = tf.keras.models.load_model("xception_full.keras", compile=False)
-    cnn  = tf.keras.models.load_model("cnn_model.keras",   compile=False)
-    return xcep, cnn
-
+# --------------- CHANGED: use cached downloader/loader instead of local files
 selected_model = st.radio("Select Model", ("Transfer Learning - Xception", "Custom CNN"))
 
-xcep_model, cnn_model = get_models()
 if selected_model == "Transfer Learning - Xception":
-    model = xcep_model
+    model = get_model("xception")
     img_size = (299, 299)
 else:
-    model = cnn_model
+    model = get_model("cnn")
     img_size = (224, 224)
+# ---------------------------------------------------------------------------
 
 mode = st.radio("Input type", ["Image (PNG/JPG)", "DICOM (.zip/.dcm)"], horizontal=True)
 

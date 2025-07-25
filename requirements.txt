@@ -16,3 +16,4 @@ shap==0.42.1
 torch>=2.2,<3.0
 nnunetv2==2.5.1
 nibabel>=5.2
+requests>=2.31.0,<3

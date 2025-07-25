@@ -271,13 +271,9 @@ if mode == "DICOM (.zip/.dcm)":
     # ---------------- Tumour segmentation block -----------------
     if st.checkbox("Run tumour segmentation (experimental)"):
         with st.spinner("Running segmentation…"):
-            # nnU‑Net path  ▼▼   (comment the other line if you switch)
             mask = segment.run_nnunet(
                 volume, spacing_mm=None, model_dir="models/nnunet_brats"
             )
-            # 2‑D UNet fallback (delete if unused)
-            # unet = segment.load_unet2d()
-            # mask = segment.run_unet2d(volume, unet)
 
         # show 3 middle slices
         mids = [volume.shape[0]//2 - 1, volume.shape[0]//2, volume.shape[0]//2 + 1]

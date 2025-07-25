@@ -13,3 +13,6 @@ reportlab==3.6.12
 pandas>=1.5.3,<3.0.0
 tf-explain==0.3.0
 shap==0.42.1
+torch>=2.2,<3.0
+nnunetv2==2.5.1
+nibabel>=5.2

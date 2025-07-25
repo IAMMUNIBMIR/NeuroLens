@@ -25,6 +25,7 @@ from src.explain.pdf_report import build_report_pdf
 from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
 from src.visualize.slice_plots import plot_slice_bar_chart
 import src.explain.attributions as attributions
+from src.seg import segment
 tf.keras.backend.clear_session()
 
 # ---------------------- constants/helpers --------------------------
@@ -210,6 +211,34 @@ def dicom_uploader_and_viewer():
     st.image(slice_img, caption=f"Axial slice {idx}/{vol.shape[0]-1}", use_container_width=True)
     return vol, orientation, idx
 
+run_seg = st.checkbox("Run tumour segmentation (experimental)")
+if run_seg:
+    with st.spinner("Running segmentation…"):
+        # choose your path:
+        # A) nnU-Net
+        # mask = segment.run_nnunet(volume, spacing_mm=None, model_dir="models/nnunet_brats")
+        # B) 2-D UNet
+        unet = segment.load_unet2d()  # cache this with st.cache_resource if you prefer
+        mask = segment.run_unet2d(volume, unet)
+
+    # show 3 middle slices
+    mid = [volume.shape[0]//2 - 1, volume.shape[0]//2, volume.shape[0]//2 + 1]
+    for i in mid:
+        overlay = segment.overlay(normalize_slice(volume[i]), mask[i])
+        st.image(overlay, caption=f"Segmentation – slice {i}", use_container_width=True)
+
+    # volume metric
+    vol_cc = segment.estimate_volume_cc(mask, spacing_mm=None)  # pass spacing if you parse DICOM headers
+    if vol_cc is None:
+        st.metric("Estimated tumour volume (voxels)", f"{int(mask.sum()):,}")
+    else:
+        st.metric("Estimated tumour volume (cc)", f"{vol_cc:.2f}")
+
+    # download NIfTI
+    nifti_bytes = segment.export_nifti(mask)
+    st.download_button("Download mask (NIfTI)", data=nifti_bytes,
+                       file_name="tumor_mask.nii.gz", mime="application/gzip")
+    
 # ---------------------- UI ---------------------------------------------------
 st.title("Brain Tumor Classification")
 st.write("Upload an image of a brain MRI scan to classify.")
@@ -238,6 +267,32 @@ if mode == "DICOM (.zip/.dcm)":
     volume, orientation, slice_idx = dicom_uploader_and_viewer()
     if volume is None:
         st.stop()
+
+    # ---------------- Tumour segmentation block -----------------
+    if st.checkbox("Run tumour segmentation (experimental)"):
+        with st.spinner("Running segmentation…"):
+            mask = segment.run_nnunet(
+                volume, spacing_mm=None, model_dir="models/nnunet_brats"
+            )
+
+        # show 3 middle slices
+        mids = [volume.shape[0]//2 - 1, volume.shape[0]//2, volume.shape[0]//2 + 1]
+        for i in mids:
+            overlay = segment.overlay(normalize_slice(volume[i]), mask[i])
+            st.image(overlay, caption=f"Segmentation – slice {i}", use_container_width=True)
+
+        # tumour volume
+        vol_cc = segment.estimate_volume_cc(mask, spacing_mm=None)
+        if vol_cc is None:
+            st.metric("Estimated tumour volume (voxels)", f"{int(mask.sum()):,}")
+        else:
+            st.metric("Estimated tumour volume (cc)", f"{vol_cc:.2f}")
+
+        # download mask
+        nifti_bytes = segment.export_nifti(mask)
+        st.download_button("Download mask (NIfTI)", data=nifti_bytes,
+                           file_name="tumor_mask.nii.gz", mime="application/gzip")
+    # ------------------------------------------------------------
 
     def prep_slice(slice2d, size):
         s = cv2.resize(slice2d, size)

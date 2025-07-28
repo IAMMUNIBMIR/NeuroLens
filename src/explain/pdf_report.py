@@ -15,20 +15,32 @@ def build_report_pdf(
     confidence: float,
     explanation: str,
     probs=None,         # optional: 1D array of class probabilities
-    labels=None         # optional: list of class names
+    labels=None,        # optional: list of class names
+    model_name: str | None = None,
+    app_version: str | None = None,
 ):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     width, height = letter
 
-    # ——— Title & Date —————————————————————————————————————————————
+    # ——— Title & Meta —————————————————————————————————————————————
     title = "Brain Tumor Classification Report"
     c.setTitle(title)
     c.setFont("Helvetica-Bold", 18)
     c.drawCentredString(width/2, height - 50, title)                                    # centered title
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     c.setFont("Helvetica", 9)
-    c.drawRightString(width - 40, height - 55, f"Date: {now}")                         # report date
+    meta_lines = []
+    if app_version:
+        meta_lines.append(f"App version: {app_version}")
+    if model_name:
+        meta_lines.append(f"Model: {model_name}")
+    meta_lines.append(f"Generated: {now}")
+    y = height - 55
+    for line in meta_lines:
+        c.drawRightString(width - 40, y, line)
+        y -= 12
     c.setStrokeColor(colors.grey)
     c.setLineWidth(1)
     c.line(40, height - 65, width - 40, height - 65)                                   # separator line
@@ -54,11 +66,11 @@ def build_report_pdf(
     # ——— Classification —————————————————————————————————————————————
     text_y = img_y - 30
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(margin, text_y, f"Prediction: {label} ({confidence*100:.2f}%)")
+    c.drawString(margin, text_y, f"Prediction: {label} — Predicted probability: {confidence*100:.2f}%")
 
     # ——— Probability Table —————————————————————————————————————————————
     if probs is not None and labels is not None:
-        data = [["Class", "Probability"]]
+        data = [["Class", "Predicted probability"]]
         for lab, p in sorted(zip(labels, probs), key=lambda x: -x[1]):
             data.append([lab, f"{p:.4f}"])
         table = Table(data, colWidths=[100, 80])

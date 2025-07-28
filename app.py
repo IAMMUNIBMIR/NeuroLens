@@ -16,6 +16,7 @@ from keras.optimizers import Adamax
 from keras.metrics import Precision, Recall
 from keras.preprocessing import image
 import google.generativeai as genai
+from streamlit.runtime.scriptrunner import RerunException
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -23,92 +24,80 @@ from dotenv import load_dotenv
 from src.explain.fallback_text import compute_saliency_stats, rule_based_explanation
 from src.explain.pdf_report import build_report_pdf
 from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
-from src.visualize.slice_plots import plot_slice_bar_chart
 import src.explain.attributions as attributions
+from src.seg import segment
 tf.keras.backend.clear_session()
 
-# ---------------------- model downloader + checksum + cached loader -----
-from typing import Optional
+APP_VERSION = "1.0.0"
 
-def _sha256(path: Path) -> str:
+# ---------------------- constants/helpers --------------------------
+LABELS = ['Glioma', 'Meningioma', 'Pituitary']
+IMG_SIZE_CNN = (224, 224)
+IMG_SIZE_XCP = (299, 299)
+MAX_UPLOAD_SIZE_MB = 200
+
+def _sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
-    return "sha256:" + h.hexdigest()
+    return h.hexdigest()
 
-def _download_and_verify(url: str, dst: Path, expected_sha: Optional[str] = None) -> Path:
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists() and dst.stat().st_size > 0:
-        if expected_sha is None or _sha256(dst) == expected_sha:
-            return dst
-        else:
-            dst.unlink(missing_ok=True)
-    tmp = dst.with_suffix(dst.suffix + ".part")
-    with requests.get(url, stream=True, timeout=300) as r:
-        r.raise_for_status()
-        with open(tmp, "wb") as f:
-            for chunk in r.iter_content(1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-    if expected_sha is not None:
-        actual = _sha256(tmp)
-        if actual != expected_sha:
-            tmp.unlink(missing_ok=True)
-            raise RuntimeError(f"Model checksum mismatch.\nExpected: {expected_sha}\nActual:   {actual}")
-    tmp.replace(dst)
-    return dst
+def _download_and_verify(url, dest, expected_sha=None):
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and expected_sha:
+        if _sha256(dest) == expected_sha.split(":")[-1]:
+            return dest
+    if not url:
+        raise ValueError("Model URL not provided.")
+    import requests
+    r = requests.get(url, stream=True)
+    r.raise_for_status()
+    with open(dest, "wb") as f:
+        for c in r.iter_content(8192):
+            f.write(c)
+    if expected_sha and _sha256(dest) != expected_sha.split(":")[-1]:
+        raise ValueError("SHA mismatch for downloaded model.")
+    return dest
 
 @st.cache_resource(show_spinner="Loading model…")
 def get_model(kind: str = "cnn"):
     models_dir = Path("models"); models_dir.mkdir(parents=True, exist_ok=True)
-    if kind == "xception":
-        url  = st.secrets["MODEL_XCP_URL"]
-        sha  = st.secrets.get("xception_model_sha")
-        path = models_dir / "xception_full.keras"
-    else:
-        url  = st.secrets["MODEL_CNN_URL"]
-        sha  = st.secrets.get("cnn_model_sha")
-        path = models_dir / "cnn_model.keras"
+    try:
+        if kind == "xception":
+            url  = st.secrets["MODEL_XCP_URL"]
+            sha  = st.secrets.get("xception_model_sha")
+            path = models_dir / "xception_full.keras"
+        else:
+            url  = st.secrets["MODEL_CNN_URL"]
+            sha  = st.secrets.get("cnn_model_sha")
+            path = models_dir / "cnn_model.keras"
+    except KeyError as e:
+        missing = str(e).strip("'")
+        st.error(
+            f"Missing secret `{missing}`. Add it in **.streamlit/secrets.toml**:\n\n"
+            "```toml\n"
+            "MODEL_CNN_URL = \"https://.../cnn_model.keras\"\n"
+            "MODEL_XCP_URL = \"https://.../xception_full.keras\"\n"
+            "cnn_model_sha = \"sha256:...\"        # optional\n"
+            "xception_model_sha = \"sha256:...\"   # optional\n"
+            "```\n"
+        )
+        st.stop()
+
     _download_and_verify(url, path, expected_sha=sha)
     return load_model(path, compile=False)
-# -----------------------------------------------------------------------
-
-# ---------------------- constants/helpers --------------------------
-LABELS = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
-
-SALIENCY_DIR = Path('saliency_maps'); SALIENCY_DIR.mkdir(exist_ok=True, parents=True)
-MODELS_DIR   = Path('models');        MODELS_DIR.mkdir(exist_ok=True, parents=True)
-
-def fetch_if_missing(url_env_key: str, dest: Path):
-    if dest.exists():
-        return dest
-    url = os.getenv(url_env_key)
-    if not url:
-        raise ValueError(f"{url_env_key} not set in environment/secrets")
-    r = requests.get(url, stream=True); r.raise_for_status()
-    with open(dest, "wb") as f:
-        for c in r.iter_content(8192):
-            f.write(c)
-    return dest
 
 load_dotenv()
 
 # ---- Gemini robust config (avoid metadata 503) ----
 ENABLE_GEMINI = True
-
-GOOGLE_API_KEY = None
-if hasattr(st, "secrets"):
-    GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
-if not GOOGLE_API_KEY:
-    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-
+GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY") if hasattr(st, "secrets") else None
 if GOOGLE_API_KEY:
-    os.environ["NO_GCE_CHECK"] = "1"
-    os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
-    import google.generativeai as genai
-    genai.configure(api_key=GOOGLE_API_KEY, transport="rest")
-
+    genai.configure(api_key=GOOGLE_API_KEY)
+else:
+    ENABLE_GEMINI = False
 
 def safe_explanation(img_path, pred_label, confidence, saliency_map, probs, labels, slice_idx=None):
     """Try Gemini; on failure or disabled, fall back to rule-based explanation."""
@@ -134,288 +123,133 @@ def safe_explanation(img_path, pred_label, confidence, saliency_map, probs, labe
         return resp.text
     except Exception as e:
         st.warning(f"Gemini failed: {e}")
+        st.caption("Using rule‑based explanation because the AI explainer was unavailable.")
         return rule_based_explanation(pred_label, confidence, stats, top2, slice_idx)
 
+# ---------------------- UI --------------------------
+st.set_page_config(page_title="NeuroLens", layout="wide")
+st.title("🧠 NeuroLens — Brain MRI Classification with Explanations")
 
-def generate_saliency_map(model, img_array, class_index, img_size):
-    with tf.GradientTape() as tape:
-        img_tensor = tf.convert_to_tensor(img_array)
-        tape.watch(img_tensor)
-        predictions = model(img_tensor)
-        target_class = predictions[:, class_index]
-    gradients = tape.gradient(target_class, img_tensor)
-    gradients = tf.math.abs(gradients)
-    gradients = tf.reduce_max(gradients, axis=-1).numpy().squeeze()
-    gradients = cv2.resize(gradients, img_size)
+uploaded = st.file_uploader("Upload a DICOM ZIP or a single PNG/JPG slice", type=["zip", "png", "jpg", "jpeg"])
 
-    center = (gradients.shape[0] // 2, gradients.shape[1] // 2)
-    radius = min(center) - 10
-    y, x = np.ogrid[:gradients.shape[0], :gradients.shape[1]]
-    mask = (x - center[0])**2 + (y - center[1])**2 <= radius**2
-
-    brain_grad = gradients[mask]
-    if brain_grad.max() > brain_grad.min():
-        brain_grad = (brain_grad - brain_grad.min()) / (brain_grad.max() - brain_grad.min())
-    gradients[mask] = brain_grad
-
-    thr = np.percentile(gradients[mask], 80)
-    gradients[gradients < thr] = 0
-    gradients = cv2.GaussianBlur(gradients, (11, 11), 0)
-    return gradients
-
-def load_model_custom(model_path):
-    img_shape=(299,299,3)
-    base_model = tf.keras.applications.Xception(include_top=False, weights="imagenet",
-                                                input_shape=img_shape, pooling='max')
-    model = Sequential([
-        base_model, Flatten(),
-        Dropout(0.3), Dense(128, activation='relu'),
-        Dropout(0.25), Dense(4, activation='softmax')
-    ])
-    model.build((None,) + img_shape)
-    model.compile(Adamax(0.001), loss='categorical_crossentropy',
-                  metrics=['accuracy', Precision(), Recall()])
-    model.load_weights(model_path)
-    return model
-
-# ---------------------- DICOM helpers -----------------------------------
-def _is_dicom(path: Path) -> bool:
-    try:
-        with open(path, "rb") as f:
-            return f.read(132)[128:132] == b"DICM"
-    except Exception:
-        return False
-
-def _load_series(folder: Path) -> np.ndarray:
-    import pydicom
-    files = [p for p in folder.rglob("*") if p.is_file() and _is_dicom(p)]
-    if not files:
-        raise ValueError("No DICOM files found")
-
-    series_map = {}
-    for f in files:
-        d = pydicom.dcmread(str(f), stop_before_pixels=True, force=True)
-        uid = getattr(d, "SeriesInstanceUID", "unknown")
-        series_map.setdefault(uid, []).append(f)
-    _, slices = max(series_map.items(), key=lambda kv: len(kv[1]))
-
-    def sort_key(p):
-        d = pydicom.dcmread(str(p), stop_before_pixels=True, force=True)
-        return getattr(d, "InstanceNumber", getattr(d, "SliceLocation", 0))
-    slices = sorted(slices, key=sort_key)
-
-    first = pydicom.dcmread(str(slices[0]))
-    intercept = float(getattr(first, "RescaleIntercept", 0))
-    slope     = float(getattr(first, "RescaleSlope", 1))
-
-    arrays = []
-    for s in slices:
-        ds = pydicom.dcmread(str(s))
-        arr = ds.pixel_array.astype(np.float32) * slope + intercept
-        arrays.append(arr)
-    return np.stack(arrays, axis=0)  # (S,H,W)
-
-@st.cache_data(show_spinner=False)
-def load_dicom_zip(file_bytes: bytes) -> np.ndarray:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-        zpath = tmpdir / "upload.zip"
-        with open(zpath, "wb") as f:
-            f.write(file_bytes)
-        with zipfile.ZipFile(zpath, "r") as zf:
-            zf.extractall(tmpdir)
-        vol = _load_series(tmpdir)
-    return vol
-
-@st.cache_data(show_spinner=False)
-def load_single_dcm(file_bytes: bytes) -> np.ndarray:
-    import pydicom
-    ds = pydicom.dcmread(io.BytesIO(file_bytes))
-    arr = ds.pixel_array.astype(np.float32)
-    return arr[None, ...]
-
-def normalize_slice(slice2d: np.ndarray) -> np.ndarray:
-    s = (slice2d - slice2d.min()) / (slice2d.ptp() + 1e-8)
-    return (s * 255).astype("uint8")
-
-def dicom_uploader_and_viewer():
-    up = st.file_uploader("Upload MRI DICOM (.zip or .dcm)", type=["zip","dcm"])
-    if not up:
-        return None, None, None
-    ext = up.name.lower().split(".")[-1]
-    vol = load_dicom_zip(up.getvalue()) if ext == "zip" else load_single_dcm(up.getvalue())
-
-    st.success(f"Loaded volume shape: {vol.shape}")  # (S,H,W)
-    orientation = "axial"
-    default_idx = st.session_state.pop("slice_slider_force", vol.shape[0]//2)
-    idx = st.slider("Slice", 0, vol.shape[0]-1, default_idx, 1, key="slice_slider")
-    slice_img = normalize_slice(vol[idx])
-    st.image(slice_img, caption=f"Axial slice {idx}/{vol.shape[0]-1}", use_container_width=True)
-    return vol, orientation, idx
-
-# ---------------------- UI ---------------------------------------------------
-st.title("Brain Tumor Classification")
-st.write("Upload an image of a brain MRI scan to classify.")
-
-# Use cached downloader/loader (from secrets URLs)
-selected_model = st.radio("Select Model", ("Transfer Learning - Xception", "Custom CNN"))
-if selected_model == "Transfer Learning - Xception":
+selected_model = st.selectbox("Select model", ["Custom CNN", "Transfer Learning - Xception"])
+if selected_model.startswith("Transfer"):
     model = get_model("xception")
-    img_size = (299, 299)
+    img_size = IMG_SIZE_XCP
 else:
     model = get_model("cnn")
-    img_size = (224, 224)
+    img_size = IMG_SIZE_CNN
 
-mode = st.radio("Input type", ["Image (PNG/JPG)", "DICOM (.zip/.dcm)"], horizontal=True)
+def prep_slice(slice_gray, img_size):
+    rgb = np.repeat(cv2.resize(slice_gray, img_size)[..., None], 3, axis=-1)
+    rgb_disp = (rgb * 255).astype("uint8") if rgb.max() <= 1.0 else rgb.astype("uint8")
+    model_in = np.expand_dims(rgb_disp / 255.0, 0).astype("float32")
+    return model_in, rgb_disp
 
-if mode == "DICOM (.zip/.dcm)":
-    volume, orientation, slice_idx = dicom_uploader_and_viewer()
-    if volume is None:
-        st.stop()
+if uploaded is not None:
+    name = uploaded.name.lower()
+    if name.endswith(".zip"):
+        from src.data.dicom_loader import load_dicom_zip
+        volume = load_dicom_zip(uploaded.read())
+        slice_idx = st.slider("Slice index", 0, int(volume.shape[0]-1), int(volume.shape[0]//2))
+        img_array, original_img_for_display = prep_slice(volume[slice_idx], img_size)
 
-    def prep_slice(slice2d, size):
-        s = cv2.resize(slice2d, size)
-        disp = ((s - s.min()) / (s.ptp() + 1e-8) * 255).astype("uint8")
-        rgb_disp = np.stack([disp, disp, disp], axis=-1)
-        model_in = np.expand_dims(rgb_disp / 255.0, 0).astype("float32")
-        return model_in, rgb_disp
+        run_all = st.checkbox("Analyze all slices", value=False)
+        MAX_SLICES_WARN = 200
+        if run_all and volume.shape[0] > MAX_SLICES_WARN:
+            st.warning(f"This series has {volume.shape[0]} slices. Running the model on all slices may be slow.")
+            proceed_all = st.checkbox(f"I understand—run on all {volume.shape[0]} slices", key="confirm_run_all")
+            if not proceed_all:
+                run_all = False
 
-    img_array, original_img_for_display = prep_slice(volume[slice_idx], img_size)
+        if run_all:
+            with st.spinner("Running model on all slices..."):
+                vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
+                vol_rgb     = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
+                preds       = model.predict(vol_rgb, verbose=0)
 
-    run_all = st.checkbox("Analyze all slices", value=False)
-    if run_all:
-        with st.spinner("Running model on all slices..."):
-            vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
-            vol_rgb     = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
-            preds       = model.predict(vol_rgb, verbose=0)
+                # 1) saliency for each slice
+                saliency_stack = []
+                for i in range(vol_resized.shape[0]):
+                    ig_map = attributions.compute_integrated_gradients(model, np.expand_dims(np.repeat(vol_resized[i][..., None],3,axis=-1)/255.0,0), int(np.argmax(preds[i])))
+                    saliency_stack.append(ig_map)
+                saliency_stack = np.asarray(saliency_stack)
 
-            # 1) saliency for each slice
-            saliency_stack = []
-            for i in range(vol_resized.shape[0]):
-                sm = generate_saliency_map(
-                    model,
-                    vol_rgb[i:i+1],           # (1, H, W, 3)
-                    np.argmax(preds[i]),      # class index
-                    img_size
-                )
-                saliency_stack.append(sm)
-            saliency_stack = np.stack(saliency_stack, axis=0)  # (S, H, W)
+                # 2) export GIF + CSV
+                gif_bytes = generate_slice_gif(vol_resized, saliency_stack, duration=0.05)
+                csv_text  = build_slice_metrics_csv(preds, LABELS)
 
-            # 2) GIF
-            gif_bytes = generate_slice_gif(vol_resized, saliency_stack, duration=0.1)
-            st.image(gif_bytes, caption="3D walkthrough (auto‐loop)", output_format="GIF", use_container_width=True)
+                st.download_button("🎞️ Download slices GIF", data=gif_bytes, file_name="slices.gif")
+                st.download_button("📊 Download slice metrics CSV", data=csv_text, file_name="slice_metrics.csv")
+        else:
+            pass
+    else:
+        img = PIL.Image.open(uploaded).convert("L")
+        arr = np.array(img)
+        volume = np.expand_dims(arr, 0)  # single-slice volume
+        slice_idx = 0
+        img_array, original_img_for_display = prep_slice(volume[slice_idx], img_size)
 
-            # 3) CSV
-            csv_str = build_slice_metrics_csv(preds, LABELS)
-            st.download_button("Download slice metrics as CSV", data=csv_str, file_name="slice_metrics.csv", mime="text/csv")
+    prediction = model.predict(img_array, verbose=0)
+    class_index = int(np.argmax(prediction[0]))
+    result = LABELS[class_index]
+    explanation = "Explanation not available."
 
-            # 4) per‑slice bar chart (current slider index)
-            fig2 = plot_slice_bar_chart(preds, slice_idx, LABELS)
-            st.plotly_chart(fig2, use_container_width=True)
+    # Placeholder: save saliency map image to a temp PNG for Gemini prompt
+    ig_map = attributions.compute_integrated_gradients(model, img_array, class_index)
+    heat_ig = cv2.applyColorMap((ig_map*255).astype("uint8"), cv2.COLORMAP_OCEAN)
+    superimposed_img = cv2.addWeighted(original_img_for_display, 0.7, heat_ig, 0.3, 0)
 
-else:
-    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
-    if not uploaded_file:
-        st.stop()
-    img = image.load_img(uploaded_file, target_size=img_size)
-    img_array = image.img_to_array(img)
-    original_img_for_display = ((img_array - img_array.min()) / (img_array.ptp()+1e-8) * 255).astype("uint8")
-    img_array = np.expand_dims(img_array, axis=0).astype("float32") / 255.0
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        PIL.Image.fromarray(superimposed_img).save(tmp.name)
+        tmp_path = tmp.name
 
-# ---------------------- Prediction & Visualization ---------------------------
-prediction = model.predict(img_array, verbose=0)
+    try:
+        explanation = safe_explanation(tmp_path, result, float(prediction[0][class_index]), ig_map, prediction[0], LABELS, slice_idx)
+    except Exception as e:
+        st.warning(f"Explanation generation failed: {e}")
 
-class_index = int(np.argmax(prediction[0]))
-result = LABELS[class_index]
-
-saliency_map = generate_saliency_map(model, img_array, class_index, img_size)
-
-heatmap = cv2.applyColorMap(np.uint8(255 * saliency_map), cv2.COLORMAP_JET)
-heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-heatmap = cv2.resize(heatmap, img_size)
-
-superimposed_img = (heatmap * 0.7 + original_img_for_display * 0.3).astype(np.uint8)
-
-if mode != "DICOM (.zip/.dcm)":
-    img_path = SALIENCY_DIR / uploaded_file.name
-    with open(img_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-else:
-    img_path = SALIENCY_DIR / f"dicom_slice_{slice_idx}.png"
-    cv2.imwrite(str(img_path), cv2.cvtColor(original_img_for_display, cv2.COLOR_RGB2BGR))
-
-saliency_map_path = str(SALIENCY_DIR / f"sal_{img_path.name}")
-cv2.imwrite(saliency_map_path, cv2.cvtColor(superimposed_img, cv2.COLOR_RGB2BGR))
-
-col1, col2 = st.columns(2)
-with col1:
-    st.image(original_img_for_display, caption='Input Image', use_container_width=True)
-with col2:
-    st.image(superimposed_img, caption='Saliency Map', use_container_width=True)
-
-st.write("## Classification Results")
-result_container = st.container()
-result_container.markdown(
-    f"""
-    <div style="background-color:#000;color:#fff;padding:30px;border-radius:15px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div style="flex:1;text-align:center;">
-          <h3 style="margin-bottom:10px;font-size:20px;">Prediction</h3>
-          <p style="font-size:36px;font-weight:800;color:#FF0000;margin:0;">{result}</p>
-        </div>
-        <div style="width:2px;height:80px;background-color:#ffffff;margin:0 20px;"></div>
-        <div style="flex:1;text-align:center;">
-          <h3 style="margin-bottom:10px;font-size:20px;">Confidence</h3>
-          <p style="font-size:36px;font-weight:800;color:#2196F3;margin:0;">{prediction[0][class_index]:.4%}</p>
-        </div>
+    # Headline cards
+    st.markdown(f"""
+    <div style="display:flex;gap:12px;align-items:center;background:#0b1d2a;padding:16px;border-radius:12px;color:#fff;">
+      <div style="flex:1;text-align:center;">
+        <h3 style="margin-bottom:10px;font-size:20px;">Prediction</h3>
+        <p style="font-size:36px;font-weight:800;color:#4CAF50;margin:0;">{result}</p>
+      </div>
+      <div style="width:2px;height:80px;background-color:#ffffff;margin:0 20px;"></div>
+      <div style="flex:1;text-align:center;">
+        <h3 style="margin-bottom:10px;font-size:20px;">Predicted probability</h3>
+        <p style="font-size:36px;font-weight:800;color:#2196F3;margin:0;">{prediction[0][class_index]:.4%}</p>
       </div>
     </div>
-    """,
-    unsafe_allow_html=True
-)
+    """, unsafe_allow_html=True)
 
-probabilities = prediction[0]
-sorted_idx = np.argsort(probabilities)[::-1]
-sorted_labels = [LABELS[i] for i in sorted_idx]
-sorted_probs = probabilities[sorted_idx]
+    # Prob bar chart
+    fig = go.Figure()
+    fig.add_bar(x=LABELS, y=prediction[0].tolist())
+    fig.update_layout(height=280, margin=dict(l=10,r=10,t=10,b=10), yaxis=dict(tickformat=".0%"))
+    st.plotly_chart(fig, use_container_width=True)
 
-fig = go.Figure(go.Bar(
-    x=sorted_probs,
-    y=sorted_labels,
-    orientation='h',
-    marker_color=['red' if lbl == result else 'blue' for lbl in sorted_labels]
-))
-fig.update_layout(
-    title='Probabilities for each class',
-    xaxis_title='Probability',
-    yaxis_title='Class',
-    height=400,
-    width=600,
-    yaxis=dict(autorange="reversed")
-)
-for i, prob in enumerate(sorted_probs):
-    fig.add_annotation(x=prob, y=i, text=f'{prob:.4f}', showarrow=False, xanchor='left', xshift=5)
+    # Explanation text
+    st.write(explanation)
 
-st.plotly_chart(fig)
+    # PDF report
+    model_name = "Xception" if selected_model.startswith("Transfer") else "Custom CNN"
+    pdf_bytes = build_report_pdf(
+        original_img_for_display, superimposed_img, label=result,
+        confidence=float(prediction[0][class_index]),
+        explanation=explanation, probs=prediction[0], labels=LABELS,
+        model_name=model_name, app_version=APP_VERSION
+    )
+    st.download_button("📄 Download Report as PDF", data=pdf_bytes, file_name="brain_tumor_report.pdf", mime="application/pdf")
 
-slice_for_text = slice_idx if mode.startswith("DICOM") else None
-explanation = safe_explanation(saliency_map_path, result, float(prediction[0][class_index]), saliency_map, probabilities, LABELS, slice_for_text)
-st.write("## Explanation")
-st.write(explanation)
+    tabs = st.tabs(["Integrated Gradients", "SHAP"])
 
-pdf_bytes = build_report_pdf(original_img_for_display, superimposed_img, result, float(prediction[0][class_index]), explanation, probs=prediction[0], labels=LABELS)
-st.download_button("📄 Download Report as PDF", data=pdf_bytes, file_name="brain_tumor_report.pdf", mime="application/pdf")
+    with tabs[0]:
+        st.image(superimposed_img, caption="Integrated Gradients overlay", use_column_width=True)
 
-tabs = st.tabs(["Integrated Gradients", "SHAP"])
-
-with tabs[0]:
-    ig_map = attributions.compute_integrated_gradients(model, img_array, class_index)
-    heat_ig = cv2.applyColorMap((ig_map*255).astype("uint8"), cv2.COLORMAP_VIRIDIS)
-    overlay_ig = (0.6*heat_ig + 0.4*original_img_for_display).astype("uint8")
-    st.image(overlay_ig, caption="Integrated Gradients", use_container_width=True)
-
-with tabs[1]:
-    shap_map = attributions.compute_shap_values(model, img_array, class_index)
-    heat_shap = cv2.applyColorMap((shap_map*255).astype("uint8"), cv2.COLORMAP_PLASMA)
-    overlay_shap = (0.6*heat_shap + 0.4*original_img_for_display).astype("uint8")
-    st.image(overlay_shap, caption="SHAP DeepExplainer", use_container_width=True)
+    with tabs[1]:
+        shap_map = attributions.compute_shap_values(model, img_array, class_index)
+        heat_shap = cv2.applyColorMap((shap_map*255).astype("uint8"), cv2.COLORMAP_OCEAN)
+        super_shap = cv2.addWeighted(original_img_for_display, 0.7, heat_shap, 0.3, 0)
+        st.image(super_shap, caption="SHAP overlay", use_column_width=True)

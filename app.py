@@ -25,7 +25,6 @@ from src.explain.fallback_text import compute_saliency_stats, rule_based_explana
 from src.explain.pdf_report import build_report_pdf
 from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
 import src.explain.attributions as attributions
-from src.seg import segment
 tf.keras.backend.clear_session()
 
 APP_VERSION = "1.0.0"

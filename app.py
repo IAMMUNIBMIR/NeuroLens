@@ -9,7 +9,6 @@ import plotly.graph_objects as go
 import PIL.Image
 import tensorflow as tf
 import hashlib
-import requests
 
 from keras.models import load_model, Sequential
 from keras.layers import Dense, Dropout, Flatten
@@ -17,7 +16,6 @@ from keras.optimizers import Adamax
 from keras.metrics import Precision, Recall
 from keras.preprocessing import image
 import google.generativeai as genai
-from streamlit.runtime.scriptrunner import RerunException
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -27,14 +25,12 @@ from src.explain.pdf_report import build_report_pdf
 from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
 from src.visualize.slice_plots import plot_slice_bar_chart
 import src.explain.attributions as attributions
-from src.seg import segment
 tf.keras.backend.clear_session()
 
-# ---------------------- NEW: model downloader + checksum + cached loader -----
+# ---------------------- model downloader + checksum + cached loader -----
 from typing import Optional
 
 def _sha256(path: Path) -> str:
-    """Compute sha256 of a file and return 'sha256:<hex>'."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -42,20 +38,12 @@ def _sha256(path: Path) -> str:
     return "sha256:" + h.hexdigest()
 
 def _download_and_verify(url: str, dst: Path, expected_sha: Optional[str] = None) -> Path:
-    """
-    Download url -> dst atomically, verify sha256 if provided, and return dst.
-    Reuses existing file if already present (and matches checksum when given).
-    """
     dst.parent.mkdir(parents=True, exist_ok=True)
-
-    # Reuse a good existing file
     if dst.exists() and dst.stat().st_size > 0:
         if expected_sha is None or _sha256(dst) == expected_sha:
             return dst
         else:
-            dst.unlink(missing_ok=True)  # bad file; redownload
-
-    # Download to a temp file first
+            dst.unlink(missing_ok=True)
     tmp = dst.with_suffix(dst.suffix + ".part")
     with requests.get(url, stream=True, timeout=300) as r:
         r.raise_for_status()
@@ -63,25 +51,16 @@ def _download_and_verify(url: str, dst: Path, expected_sha: Optional[str] = None
             for chunk in r.iter_content(1024 * 1024):
                 if chunk:
                     f.write(chunk)
-
-    # Verify checksum if provided
     if expected_sha is not None:
         actual = _sha256(tmp)
         if actual != expected_sha:
             tmp.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"Model checksum mismatch.\nExpected: {expected_sha}\nActual:   {actual}"
-            )
-
-    tmp.replace(dst)  # atomic move
+            raise RuntimeError(f"Model checksum mismatch.\nExpected: {expected_sha}\nActual:   {actual}")
+    tmp.replace(dst)
     return dst
 
 @st.cache_resource(show_spinner="Loading model…")
 def get_model(kind: str = "cnn"):
-    """
-    Download + cache model file (once per container), verify sha256, load with Keras,
-    and cache the loaded model object for reuse.
-    """
     models_dir = Path("models"); models_dir.mkdir(parents=True, exist_ok=True)
     if kind == "xception":
         url  = st.secrets["MODEL_XCP_URL"]
@@ -91,10 +70,9 @@ def get_model(kind: str = "cnn"):
         url  = st.secrets["MODEL_CNN_URL"]
         sha  = st.secrets.get("cnn_model_sha")
         path = models_dir / "cnn_model.keras"
-
     _download_and_verify(url, path, expected_sha=sha)
     return load_model(path, compile=False)
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------
 
 # ---------------------- constants/helpers --------------------------
 LABELS = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
@@ -119,7 +97,6 @@ load_dotenv()
 # ---- Gemini robust config (avoid metadata 503) ----
 ENABLE_GEMINI = True
 
-# pull key from secrets or env
 GOOGLE_API_KEY = None
 if hasattr(st, "secrets"):
     GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
@@ -127,14 +104,13 @@ if not GOOGLE_API_KEY:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 if GOOGLE_API_KEY:
-    os.environ["NO_GCE_CHECK"] = "1"                 # stop metadata probe
+    os.environ["NO_GCE_CHECK"] = "1"
     os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
     import google.generativeai as genai
     genai.configure(api_key=GOOGLE_API_KEY, transport="rest")
 
 
-def safe_explanation(img_path, pred_label, confidence, saliency_map,probs, labels, slice_idx=None):
-
+def safe_explanation(img_path, pred_label, confidence, saliency_map, probs, labels, slice_idx=None):
     """Try Gemini; on failure or disabled, fall back to rule-based explanation."""
     stats = compute_saliency_stats(saliency_map)
     top2_idx = np.argsort(probs)[::-1][:2]
@@ -165,10 +141,8 @@ def generate_saliency_map(model, img_array, class_index, img_size):
     with tf.GradientTape() as tape:
         img_tensor = tf.convert_to_tensor(img_array)
         tape.watch(img_tensor)
-        # just call the model directly:
         predictions = model(img_tensor)
         target_class = predictions[:, class_index]
-
     gradients = tape.gradient(target_class, img_tensor)
     gradients = tf.math.abs(gradients)
     gradients = tf.reduce_max(gradients, axis=-1).numpy().squeeze()
@@ -279,48 +253,18 @@ def dicom_uploader_and_viewer():
     st.image(slice_img, caption=f"Axial slice {idx}/{vol.shape[0]-1}", use_container_width=True)
     return vol, orientation, idx
 
-run_seg = st.checkbox("Run tumour segmentation (experimental)")
-if run_seg:
-    with st.spinner("Running segmentation…"):
-        # choose your path:
-        # A) nnU-Net
-        # mask = segment.run_nnunet(volume, spacing_mm=None, model_dir="models/nnunet_brats")
-        # B) 2-D UNet
-        unet = segment.load_unet2d()  # cache this with st.cache_resource if you prefer
-        mask = segment.run_unet2d(volume, unet)
-
-    # show 3 middle slices
-    mid = [volume.shape[0]//2 - 1, volume.shape[0]//2, volume.shape[0]//2 + 1]
-    for i in mid:
-        overlay = segment.overlay(normalize_slice(volume[i]), mask[i])
-        st.image(overlay, caption=f"Segmentation – slice {i}", use_container_width=True)
-
-    # volume metric
-    vol_cc = segment.estimate_volume_cc(mask, spacing_mm=None)  # pass spacing if you parse DICOM headers
-    if vol_cc is None:
-        st.metric("Estimated tumour volume (voxels)", f"{int(mask.sum()):,}")
-    else:
-        st.metric("Estimated tumour volume (cc)", f"{vol_cc:.2f}")
-
-    # download NIfTI
-    nifti_bytes = segment.export_nifti(mask)
-    st.download_button("Download mask (NIfTI)", data=nifti_bytes,
-                       file_name="tumor_mask.nii.gz", mime="application/gzip")
-    
 # ---------------------- UI ---------------------------------------------------
 st.title("Brain Tumor Classification")
 st.write("Upload an image of a brain MRI scan to classify.")
 
-# --------------- CHANGED: use cached downloader/loader instead of local files
+# Use cached downloader/loader (from secrets URLs)
 selected_model = st.radio("Select Model", ("Transfer Learning - Xception", "Custom CNN"))
-
 if selected_model == "Transfer Learning - Xception":
     model = get_model("xception")
     img_size = (299, 299)
 else:
     model = get_model("cnn")
     img_size = (224, 224)
-# ---------------------------------------------------------------------------
 
 mode = st.radio("Input type", ["Image (PNG/JPG)", "DICOM (.zip/.dcm)"], horizontal=True)
 
@@ -328,32 +272,6 @@ if mode == "DICOM (.zip/.dcm)":
     volume, orientation, slice_idx = dicom_uploader_and_viewer()
     if volume is None:
         st.stop()
-
-    # ---------------- Tumour segmentation block -----------------
-    if st.checkbox("Run tumour segmentation (experimental)"):
-        with st.spinner("Running segmentation…"):
-            mask = segment.run_nnunet(
-                volume, spacing_mm=None, model_dir="models/nnunet_brats"
-            )
-
-        # show 3 middle slices
-        mids = [volume.shape[0]//2 - 1, volume.shape[0]//2, volume.shape[0]//2 + 1]
-        for i in mids:
-            overlay = segment.overlay(normalize_slice(volume[i]), mask[i])
-            st.image(overlay, caption=f"Segmentation – slice {i}", use_container_width=True)
-
-        # tumour volume
-        vol_cc = segment.estimate_volume_cc(mask, spacing_mm=None)
-        if vol_cc is None:
-            st.metric("Estimated tumour volume (voxels)", f"{int(mask.sum()):,}")
-        else:
-            st.metric("Estimated tumour volume (cc)", f"{vol_cc:.2f}")
-
-        # download mask
-        nifti_bytes = segment.export_nifti(mask)
-        st.download_button("Download mask (NIfTI)", data=nifti_bytes,
-                           file_name="tumor_mask.nii.gz", mime="application/gzip")
-    # ------------------------------------------------------------
 
     def prep_slice(slice2d, size):
         s = cv2.resize(slice2d, size)
@@ -371,7 +289,7 @@ if mode == "DICOM (.zip/.dcm)":
             vol_rgb     = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
             preds       = model.predict(vol_rgb, verbose=0)
 
-            # 1) build the saliency stack for every slice
+            # 1) saliency for each slice
             saliency_stack = []
             for i in range(vol_resized.shape[0]):
                 sm = generate_saliency_map(
@@ -383,20 +301,15 @@ if mode == "DICOM (.zip/.dcm)":
                 saliency_stack.append(sm)
             saliency_stack = np.stack(saliency_stack, axis=0)  # (S, H, W)
 
-            # 2) generate GIF
+            # 2) GIF
             gif_bytes = generate_slice_gif(vol_resized, saliency_stack, duration=0.1)
-            st.image(
-                gif_bytes,
-                caption="3D walkthrough (auto‐loop)",
-                output_format="GIF",
-                use_container_width=True
-            )
+            st.image(gif_bytes, caption="3D walkthrough (auto‐loop)", output_format="GIF", use_container_width=True)
 
-            # 3) generate CSV
+            # 3) CSV
             csv_str = build_slice_metrics_csv(preds, LABELS)
             st.download_button("Download slice metrics as CSV", data=csv_str, file_name="slice_metrics.csv", mime="text/csv")
 
-            # 4) per‑slice bar chart (for current slider index)
+            # 4) per‑slice bar chart (current slider index)
             fig2 = plot_slice_bar_chart(preds, slice_idx, LABELS)
             st.plotly_chart(fig2, use_container_width=True)
 
@@ -486,7 +399,7 @@ for i, prob in enumerate(sorted_probs):
 st.plotly_chart(fig)
 
 slice_for_text = slice_idx if mode.startswith("DICOM") else None
-explanation = safe_explanation(saliency_map_path,result,float(prediction[0][class_index]),saliency_map,probabilities,LABELS,slice_for_text)
+explanation = safe_explanation(saliency_map_path, result, float(prediction[0][class_index]), saliency_map, probabilities, LABELS, slice_for_text)
 st.write("## Explanation")
 st.write(explanation)
 

@@ -1,4 +1,3 @@
-# src/explain/pdf_report.py
 import io
 from datetime import datetime
 from reportlab.pdfgen import canvas

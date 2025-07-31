@@ -27,6 +27,7 @@ from src.explain.pdf_report import build_report_pdf
 from src.visualize.gif_csv import generate_slice_gif, build_slice_metrics_csv
 from src.visualize.slice_plots import plot_slice_bar_chart
 import src.explain.attributions as attributions
+from src.telemetry.metrics import get_store, timed_infer
 tf.keras.backend.clear_session()
 
 # ---------------------- NEW: model downloader + checksum + cached loader -----
@@ -354,7 +355,13 @@ else:
     img_array = np.expand_dims(img_array, axis=0).astype("float32") / 255.0
 
 # ---------------------- Prediction & Visualization ---------------------------
-prediction = model.predict(img_array, verbose=0)
+store = get_store(st)
+prediction, latency_ms = timed_infer(model.predict, img_array, verbose=0)
+# record metrics (latency + drift proxy)
+try:
+    store.add(latency_ms, probs=prediction[0], labels=LABELS)
+except Exception:
+    pass
 
 class_index = int(np.argmax(prediction[0]))
 result = LABELS[class_index]
@@ -428,6 +435,37 @@ for i, prob in enumerate(sorted_probs):
     fig.add_annotation(x=prob, y=i, text=f'{prob:.4f}', showarrow=False, xanchor='left', xshift=5)
 
 st.plotly_chart(fig)
+
+# Metrics & Diagnostics (no-cost, in-app)
+with st.expander("Metrics & Diagnostics", expanded=False):
+    summary = store.summary()
+    if summary.get("count", 0) > 0:
+        colA, colB, colC = st.columns(3)
+        colA.metric("Requests", summary["count"])
+        colB.metric("Median latency (ms)", f"{summary['p50_ms']:.1f}")
+        colC.metric("P95 latency (ms)", f"{summary['p95_ms']:.1f}")
+
+        # Latency timeline
+        import plotly.graph_objects as go
+        latencies = [r.latency_ms for r in store.rows]
+        xs = list(range(1, len(latencies)+1))
+        fig_lat = go.Figure()
+        fig_lat.add_scatter(x=xs, y=latencies, mode="lines+markers", name="latency_ms")
+        fig_lat.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10), yaxis_title="ms")
+        st.plotly_chart(fig_lat, use_container_width=True)
+
+        # KL-drift timeline (if available)
+        drifts = [r.kl_drift for r in store.rows if r.kl_drift is not None]
+        if drifts:
+            xs2 = list(range(1, len(drifts)+1))
+            fig_kl = go.Figure()
+            fig_kl.add_scatter(x=xs2, y=drifts, mode="lines+markers", name="softmax_kl_drift")
+            fig_kl.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10), yaxis_title="KL")
+            st.plotly_chart(fig_kl, use_container_width=True)
+
+        st.download_button("Download metrics CSV", data=store.to_csv(), file_name="metrics.csv", mime="text/csv")
+    else:
+        st.caption("Run a prediction to populate metrics.")
 
 slice_for_text = slice_idx if mode.startswith("DICOM") else None
 explanation = safe_explanation(saliency_map_path,result,float(prediction[0][class_index]),saliency_map,probabilities,LABELS,slice_for_text)

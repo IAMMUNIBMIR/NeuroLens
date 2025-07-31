@@ -1,55 +1,66 @@
 # NeuroLens – Model Card
 
-**Task:** Brain MRI tumor classification (Glioma / Meningioma / Pituitary)  
-**Models:** Custom CNN (224×224), Xception (299×299, fine‑tuned)  
+**Task:** Brain MRI tumor classification (**Glioma / Meningioma / No tumor / Pituitary**)  
+**Models:** Custom CNN (224×224), Xception (299×299, fine-tuned)  
 **Intended use:** Educational/experimental demo to illustrate classification and explanations. **Not for clinical diagnosis.**
 
 ---
 
 ## 1. Overview
-NeuroLens is a Streamlit app that accepts a brain MRI slice or a DICOM series, runs a tumor classifier, and provides post‑hoc explanations (Integrated Gradients and SHAP). It is designed for demonstration and learning purposes.
+NeuroLens is a Streamlit app that accepts a brain MRI slice or a DICOM series, runs a tumor classifier, and provides post-hoc explanations (Integrated Gradients and SHAP). It is designed for demonstration and learning purposes.
+
+---
 
 ## 2. Data
-- **Source:** [document the dataset you used; e.g., Kaggle brain MRI dataset or internal sample].
-- **Preprocessing:** grayscale → resize to model input (CNN: 224×224, Xception: 299×299); scale to [0,1]; for series, works per‑slice.
-- **Class balance:** [insert approximate class counts or note if imbalanced].
-- **Train/Val split:** [insert split method].
+- **Source:** Public brain tumor MRI image dataset (four classes: *glioma, meningioma, pituitary, no tumor*) commonly distributed in a **Training** and **Testing** directory structure.
+- **Class balance:** Four classes with moderate imbalance (typically “No tumor” slightly higher than others).
+- **Preprocessing:**
+  - **PNG/JPG slices:** resize to **224×224** (Custom CNN) or **299×299** (Xception), convert to RGB if needed, scale to **[0,1]**.
+  - **DICOM series:** per-slice min–max normalization to uint8, resize to model input, replicate to 3 channels, scale to **[0,1]**.
+- **Train/Val split:** Uses the dataset’s Train/Test split. Within **Train**, validation is created with **15%** via Keras `ImageDataGenerator(validation_split=0.15)`.
 
-## 3. Metrics (validation)
-Report on your held‑out validation set:
-- **Accuracy:** [..]
-- **Per‑class F1:** Glioma [..], Meningioma [..], Pituitary [..]
-- **ROC‑AUC (macro):** [..]
-- **Latency (CPU, Streamlit Cloud):** median [..] ms, P95 [..] ms (from in‑app metrics).
+---
 
-> Note: Metrics reported here are not indicative of clinical performance.
+## 3. Model details
+- **Custom CNN:** Convolutional blocks → Flatten → Dense(128) → **Dense(4, softmax)** at **224×224×3** input;  
+  **Loss:** categorical cross-entropy; **Optimizer:** **Adamax (lr=0.001)**;  
+  **Augmentation (when training):** rotation **15°**, width/height shift **0.04**, shear **0.05**, zoom **0.05**, horizontal flip; rescale **1/255**.
+- **Xception:** Keras/TensorFlow Xception backbone with a fine-tuned head; **softmax over 4 classes**; input **299×299×3**;  
+  **Loss:** categorical cross-entropy; **Optimizer:** Adamax (lr=0.001).
 
-## 4. Model details
-- **Custom CNN:** [brief architecture summary if available].
-- **Xception:** Keras/TensorFlow Xception base with top layers fine‑tuned; softmax over 3 classes.
-- **Loss:** categorical cross‑entropy; **Optimizer:** [e.g., Adamax]; **Augmentation:** [if any].
+---
 
-## 5. Intended users & use cases
-- Students, researchers, and engineers exploring explainable AI for medical images.
+## 4. Intended users & use cases
+- Students, researchers, and engineers exploring explainable AI for medical images.  
 - Not intended for patient care or diagnostic decisions.
 
-## 6. Limitations / Risks
-- Dataset may be small or biased; may not generalize across scanners, sequences, or institutions.
-- Post‑hoc explanations can be noisy; saliency does not imply causal importance.
-- Single‑slice inference may miss 3D context present in full volumes.
+---
 
-## 7. Interpretability
-- **Integrated Gradients** and **SHAP** overlays are provided at reduced resolution for performance.
+## 5. Limitations / Risks
+- Dataset bias and variability (scanner/sequences/institutions) can affect generalization.  
+- Post-hoc explanations can be noisy; highlighted pixels are not causal proof.  
+- Single-slice inference may miss 3D context present in full volumes.
+
+---
+
+## 6. Interpretability
+- **Integrated Gradients** and **SHAP** overlays are provided at reduced resolution for performance.  
 - Explanations highlight pixels contributing to the predicted class.
 
-## 8. Monitoring
-- The app tracks **inference latency** and a simple **softmax KL‑drift** proxy to detect distributional shifts.
-- Drift baseline defaults to uniform (1/3,1/3,1/3); can be overridden via `BASELINE_PROBS` secret/env var.
+---
 
-## 9. Ethical considerations
-- The app displays a **“not for clinical use”** disclaimer.
+## 7. Monitoring
+- The app tracks **inference latency** (per request) and a **softmax KL-drift** proxy (prediction distribution vs. a baseline).  
+- Drift baseline defaults to uniform (**1/4, 1/4, 1/4, 1/4** for four classes); can be overridden via `BASELINE_PROBS` (comma-separated) in secrets/env.
+
+---
+
+## 8. Ethical considerations
+- The app displays a **“not for clinical use”** disclaimer.  
 - Users should not upload PHI or identifiable data.
 
-## 10. Versioning
-- **App version:** `1.0.0` (shown in the PDF header)
+---
+
+## 9. Versioning
+- **App version:** `1.0.0` (also shown in the PDF header when enabled).  
 - **Changelog:** See repository releases/tags for updates.

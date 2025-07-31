@@ -101,6 +101,7 @@ LABELS = ['Glioma', 'Meningioma', 'No tumor', 'Pituitary']
 
 SALIENCY_DIR = Path('saliency_maps'); SALIENCY_DIR.mkdir(exist_ok=True, parents=True)
 MODELS_DIR   = Path('models');        MODELS_DIR.mkdir(exist_ok=True, parents=True)
+MAX_FILE_BYTES = 250 * 1024 * 1024  # 250 MB
 
 def fetch_if_missing(url_env_key: str, dest: Path):
     if dest.exists():
@@ -268,6 +269,9 @@ def dicom_uploader_and_viewer():
     up = st.file_uploader("Upload MRI DICOM (.zip or .dcm)", type=["zip","dcm"])
     if not up:
         return None, None, None
+    if getattr(up, "size", 0) > MAX_FILE_BYTES:
+        st.error(f"File too large ({up.size/1_048_576:.1f} MB). Max is 250 MB.")
+        return None, None, None
     ext = up.name.lower().split(".")[-1]
     vol = load_dicom_zip(up.getvalue()) if ext == "zip" else load_single_dcm(up.getvalue())
 
@@ -282,6 +286,14 @@ def dicom_uploader_and_viewer():
 # ---------------------- UI ---------------------------------------------------
 st.title("Brain Tumor Classification")
 st.write("Upload an image of a brain MRI scan to classify.")
+
+with st.sidebar:
+    st.header("About")
+    st.markdown(
+        "- **Live demo:** https://neurolens-munib.streamlit.app\n"
+        "- **Model Card:** see `docs/model_card.md` in the repository\n"
+        "- **Disclaimer:** Demo for education; **not for clinical use**."
+    )
 
 # --------------- CHANGED: use cached downloader/loader instead of local files
 selected_model = st.radio("Select Model", ("Transfer Learning - Xception", "Custom CNN"))
@@ -314,39 +326,68 @@ if mode == "DICOM (.zip/.dcm)":
         with st.spinner("Running model on all slices..."):
             vol_resized = np.stack([cv2.resize(s, img_size) for s in volume], axis=0)
             vol_rgb     = np.repeat(vol_resized[..., None], 3, axis=-1) / 255.0
-            preds       = model.predict(vol_rgb, verbose=0)
 
-            # 1) build the saliency stack for every slice
+            # NEW: progress + cancel
+            S = vol_resized.shape[0]
+            if "stop_all" not in st.session_state:
+                st.session_state["stop_all"] = False
+            cols = st.columns([1,1])
+            stop_btn = cols[0].button("⏹ Stop")
+            progress = cols[1].progress(0, text="Analyzing slices…")
+            if stop_btn:
+                st.session_state["stop_all"] = True
+
+            preds = []
             saliency_stack = []
-            for i in range(vol_resized.shape[0]):
+            for i in range(S):
+                if st.session_state.get("stop_all"):
+                    st.info(f"Stopped at slice {i}/{S}.")
+                    break
+
+                p = model.predict(vol_rgb[i:i+1], verbose=0)
+                preds.append(p[0])
+
                 sm = generate_saliency_map(
                     model,
                     vol_rgb[i:i+1],           # (1, H, W, 3)
-                    np.argmax(preds[i]),      # class index
+                    np.argmax(p[0]),          # class index
                     img_size
                 )
                 saliency_stack.append(sm)
-            saliency_stack = np.stack(saliency_stack, axis=0)  # (S, H, W)
+
+                progress.progress((i+1)/S, text=f"Analyzing slices… {i+1}/{S}")
+
+            progress.empty()
+            st.session_state["stop_all"] = False
+
+            if len(preds) == 0:
+                st.stop()
+
+            preds = np.asarray(preds)                # (N, C)
+            saliency_stack = np.asarray(saliency_stack)  # (N, H, W)
 
             # 2) generate GIF
-            gif_bytes = generate_slice_gif(vol_resized, saliency_stack, duration=0.1)
+            gif_bytes = generate_slice_gif(vol_resized[:len(saliency_stack)], saliency_stack, duration=0.1)
             st.image(
                 gif_bytes,
                 caption="3D walkthrough (auto‐loop)",
                 output_format="GIF",
-                use_container_width=True
+                use_column_width=True
             )
 
             # 3) generate CSV
             csv_str = build_slice_metrics_csv(preds, LABELS)
             st.download_button("Download slice metrics as CSV", data=csv_str, file_name="slice_metrics.csv", mime="text/csv")
 
-            # 4) per‑slice bar chart (for current slider index)
+            # 4) per-slice bar chart (for current slider index)
             fig2 = plot_slice_bar_chart(preds, slice_idx, LABELS)
             st.plotly_chart(fig2, use_container_width=True)
 
 else:
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+    if uploaded_file is not None and getattr(uploaded_file, "size", 0) > MAX_FILE_BYTES:
+        st.error(f"File too large ({uploaded_file.size/1_048_576:.1f} MB). Max is 250 MB.")
+        st.stop()
     if not uploaded_file:
         st.stop()
     img = image.load_img(uploaded_file, target_size=img_size)
@@ -403,7 +444,7 @@ result_container.markdown(
         </div>
         <div style="width:2px;height:80px;background-color:#ffffff;margin:0 20px;"></div>
         <div style="flex:1;text-align:center;">
-          <h3 style="margin-bottom:10px;font-size:20px;">Confidence</h3>
+          <h3 style="margin-bottom:10px;font-size:20px;">Predicted probability</h3>
           <p style="font-size:36px;font-weight:800;color:#2196F3;margin:0;">{prediction[0][class_index]:.4%}</p>
         </div>
       </div>
@@ -484,7 +525,13 @@ with tabs[0]:
     st.image(overlay_ig, caption="Integrated Gradients", use_container_width=True)
 
 with tabs[1]:
-    shap_map = attributions.compute_shap_values(model, img_array, class_index)
-    heat_shap = cv2.applyColorMap((shap_map*255).astype("uint8"), cv2.COLORMAP_PLASMA)
-    overlay_shap = (0.6*heat_shap + 0.4*original_img_for_display).astype("uint8")
-    st.image(overlay_shap, caption="SHAP DeepExplainer", use_container_width=True)
+    x_for_shap = img_array.astype("float32", copy=False)
+    try:
+        shap_map = attributions.compute_shap_values(model, x_for_shap, class_index)
+        heat_shap = cv2.applyColorMap((shap_map*255).astype("uint8"), cv2.COLORMAP_PLASMA)
+        overlay_shap = (0.6*heat_shap + 0.4*original_img_for_display).astype("uint8")
+        st.image(overlay_shap, caption="SHAP DeepExplainer", use_container_width=True)
+    except Exception as e:
+        st.warning(f"SHAP failed on this input: {e}")
+        st.caption("Showing Integrated Gradients overlay instead.")
+        st.image(overlay_ig, caption="Integrated Gradients (fallback)", use_container_width=True)

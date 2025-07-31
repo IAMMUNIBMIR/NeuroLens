@@ -242,6 +242,16 @@ def _load_series(folder: Path) -> np.ndarray:
         arrays.append(arr)
     return np.stack(arrays, axis=0)  # (S,H,W)
 
+def safe_extract(zf: zipfile.ZipFile, dest_dir: Path) -> None:
+    dest_dir = Path(dest_dir).resolve()
+    for member in zf.infolist():
+        member_path = dest_dir / member.filename
+        # Resolve to catch ../ tricks
+        resolved = member_path.resolve()
+        if not str(resolved).startswith(str(dest_dir)):
+            raise ValueError(f"Blocked zip path traversal: {member.filename}")
+    zf.extractall(dest_dir)
+
 @st.cache_data(show_spinner=False)
 def load_dicom_zip(file_bytes: bytes) -> np.ndarray:
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -250,7 +260,7 @@ def load_dicom_zip(file_bytes: bytes) -> np.ndarray:
         with open(zpath, "wb") as f:
             f.write(file_bytes)
         with zipfile.ZipFile(zpath, "r") as zf:
-            zf.extractall(tmpdir)
+            safe_extract(zf, tmpdir)
         vol = _load_series(tmpdir)
     return vol
 
@@ -286,14 +296,6 @@ def dicom_uploader_and_viewer():
 # ---------------------- UI ---------------------------------------------------
 st.title("Brain Tumor Classification")
 st.write("Upload an image of a brain MRI scan to classify.")
-
-with st.sidebar:
-    st.header("About")
-    st.markdown(
-        "- **Live demo:** https://neurolens-munib.streamlit.app\n"
-        "- **Model Card:** see `docs/model_card.md` in the repository\n"
-        "- **Disclaimer:** Demo for education; **not for clinical use**."
-    )
 
 # --------------- CHANGED: use cached downloader/loader instead of local files
 selected_model = st.radio("Select Model", ("Transfer Learning - Xception", "Custom CNN"))

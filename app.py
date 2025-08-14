@@ -30,6 +30,62 @@ import src.explain.attributions as attributions
 from src.telemetry.metrics import get_store, timed_infer
 tf.keras.backend.clear_session()
 
+# ---- App theme & page config (must be before any st.* usage) ----
+st.set_page_config(page_title="NeuroLens", page_icon="🧠", layout="wide")
+
+st.markdown("""
+<style>
+:root {
+  --bg: #0b1020;
+  --card: #0f1629;
+  --muted: #a0aec0;
+  --accent1: #21D4FD; /* cyan */
+  --accent2: #B721FF; /* magenta */
+}
+
+/* nebula background */
+.stApp {
+  background:
+    radial-gradient(900px 500px at 5% -10%, rgba(33,212,253,0.10), transparent 45%),
+    radial-gradient(900px 500px at 110% -10%, rgba(183,33,255,0.10), transparent 45%),
+    var(--bg);
+}
+
+/* gradient text utility */
+.neuro-gradient {
+  background: linear-gradient(90deg, var(--accent1), var(--accent2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* glass cards */
+.card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 16px; padding: 16px 18px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+}
+
+/* thin divider */
+.divider { height:1px; margin:10px 0 14px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+}
+
+/* compact metrics boxes */
+.metric-box { text-align:center; border-radius:14px; padding:12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+/* nicer download buttons */
+.stDownloadButton button {
+  background: linear-gradient(90deg, var(--accent1), var(--accent2)) !important;
+  color: white !important; border: 0 !important; border-radius: 12px !important;
+  font-weight: 700 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+# ---------------------------------------------------------------
+
 # ---------------------- NEW: model downloader + checksum + cached loader -----
 from typing import Optional
 
@@ -294,8 +350,8 @@ def dicom_uploader_and_viewer():
     return vol, orientation, idx
     
 # ---------------------- UI ---------------------------------------------------
-st.title("Brain Tumor Classification")
-st.write("Upload an image of a brain MRI scan to classify.")
+st.markdown('<h1 class="neuro-gradient">NeuroLens — Brain Tumor Classification</h1>', unsafe_allow_html=True)
+st.caption("Upload a PNG/JPG slice or a DICOM series to classify and explain (IG & SHAP).")
 
 # --------------- CHANGED: use cached downloader/loader instead of local files
 selected_model = st.radio("Select Model", ("Transfer Learning - Xception", "Custom CNN"))
@@ -383,6 +439,8 @@ if mode == "DICOM (.zip/.dcm)":
 
             # 4) per-slice bar chart (for current slider index)
             fig2 = plot_slice_bar_chart(preds, slice_idx, LABELS)
+            fig2.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                               margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(fig2, use_container_width=True)
 
 else:
@@ -438,17 +496,29 @@ st.write("## Classification Results")
 result_container = st.container()
 result_container.markdown(
     f"""
-    <div style="background-color:#000;color:#fff;padding:30px;border-radius:15px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
+    <div class="card">
+      <div style="display:flex;gap:18px;align-items:center;">
         <div style="flex:1;text-align:center;">
-          <h3 style="margin-bottom:10px;font-size:20px;">Prediction</h3>
-          <p style="font-size:36px;font-weight:800;color:#FF0000;margin:0;">{result}</p>
+          <div style="font-size:13px;color:#A0AEC0;margin-bottom:6px;">Prediction</div>
+          <div class="neuro-gradient" style="font-size:32px;font-weight:900;letter-spacing:.3px;">
+            {result}
+          </div>
         </div>
-        <div style="width:2px;height:80px;background-color:#ffffff;margin:0 20px;"></div>
+        <div style="width:1px;height:64px;background:linear-gradient(180deg, transparent, rgba(255,255,255,.25), transparent);"></div>
         <div style="flex:1;text-align:center;">
-          <h3 style="margin-bottom:10px;font-size:20px;">Predicted probability</h3>
-          <p style="font-size:36px;font-weight:800;color:#2196F3;margin:0;">{prediction[0][class_index]:.4%}</p>
+          <div style="font-size:13px;color:#A0AEC0;margin-bottom:6px;">Predicted probability</div>
+          <div style="font-size:28px;font-weight:800;color:#E2E8F0;">
+            {prediction[0][class_index]:.2%}
+          </div>
         </div>
+      </div>
+      <div class="divider"></div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <span style="font-size:12px;color:#94a3b8;">Model:</span>
+        <span style="font-size:12px;color:#e2e8f0;">{"Xception" if "Transfer" in selected_model else "Custom CNN"}</span>
+        <span style="opacity:.5;">•</span>
+        <span style="font-size:12px;color:#94a3b8;">Input size:</span>
+        <span style="font-size:12px;color:#e2e8f0;">{img_size[0]}×{img_size[1]}</span>
       </div>
     </div>
     """,
@@ -474,6 +544,8 @@ fig.update_layout(
     width=600,
     yaxis=dict(autorange="reversed")
 )
+fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                  margin=dict(l=10, r=10, t=40, b=10))
 for i, prob in enumerate(sorted_probs):
     fig.add_annotation(x=prob, y=i, text=f'{prob:.4f}', showarrow=False, xanchor='left', xshift=5)
 
@@ -483,10 +555,13 @@ st.plotly_chart(fig)
 with st.expander("Metrics & Diagnostics", expanded=False):
     summary = store.summary()
     if summary.get("count", 0) > 0:
-        colA, colB, colC = st.columns(3)
-        colA.metric("Requests", summary["count"])
-        colB.metric("Median latency (ms)", f"{summary['p50_ms']:.1f}")
-        colC.metric("P95 latency (ms)", f"{summary['p95_ms']:.1f}")
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            colA, colB, colC = st.columns(3)
+            colA.metric("Requests", summary["count"])
+            colB.metric("Median latency (ms)", f"{summary['p50_ms']:.1f}")
+            colC.metric("P95 latency (ms)", f"{summary['p95_ms']:.1f}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
         # Latency timeline
         import plotly.graph_objects as go
@@ -495,6 +570,7 @@ with st.expander("Metrics & Diagnostics", expanded=False):
         fig_lat = go.Figure()
         fig_lat.add_scatter(x=xs, y=latencies, mode="lines+markers", name="latency_ms")
         fig_lat.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10), yaxis_title="ms")
+        fig_lat.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_lat, use_container_width=True)
 
         # KL-drift timeline (if available)
@@ -504,6 +580,7 @@ with st.expander("Metrics & Diagnostics", expanded=False):
             fig_kl = go.Figure()
             fig_kl.add_scatter(x=xs2, y=drifts, mode="lines+markers", name="softmax_kl_drift")
             fig_kl.update_layout(height=240, margin=dict(l=10,r=10,t=10,b=10), yaxis_title="KL")
+            fig_kl.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig_kl, use_container_width=True)
 
         st.download_button("Download metrics CSV", data=store.to_csv(), file_name="metrics.csv", mime="text/csv")
